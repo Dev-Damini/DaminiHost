@@ -1,80 +1,21 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-
-// ─── Fake data ──────────────────────────────────────────────────────────────
-const FAKE_LOGS = [
-  "> Initializing bot runtime...",
-  "> Loading configuration from config.json",
-  "> Connecting to Discord gateway...",
-  "> Shard [0] ready",
-  "> Logged in as DANI#0001",
-  "> Watching 14 guilds | 3,204 users",
-  "> Command handler loaded: 42 commands",
-  "> Event listeners registered",
-  "> Heartbeat OK — latency: 48ms",
-  "> Message received in #general",
-  "> Command executed: /help by Veronica#0001",
-  "> Response sent in 112ms",
-  "> Heartbeat OK — latency: 51ms",
-  "> Presence updated: Online",
-  "> Rate limit hit on endpoint /channels — retrying in 1s",
-  "> Retry success",
-  "> Heartbeat OK — latency: 44ms",
-];
-
-const INITIAL_SERVERS = [
-  {
-    id: "srv_001",
-    name: "DANI Bot",
-    status: "running",
-    ram: 182,
-    cpu: 14,
-    uptime: 172800,
-    port: 3001,
-    files: ["index.js", "config.json", "commands/", "events/"],
-  },
-  {
-    id: "srv_002",
-    name: "PrimisAI API",
-    status: "stopped",
-    ram: 0,
-    cpu: 0,
-    uptime: 0,
-    port: 3002,
-    files: ["server.js", "routes/", ".env", "package.json"],
-  },
-  {
-    id: "srv_003",
-    name: "DANI Search",
-    status: "running",
-    ram: 94,
-    cpu: 6,
-    uptime: 86400,
-    port: 3003,
-    files: ["main.js", "scraper.js", "utils/", "package.json"],
-  },
-];
+import { auth as authApi, servers as serversApi } from "./api.js";
 
 // ─── Utils ───────────────────────────────────────────────────────────────────
 function fmtUptime(s) {
   if (!s) return "—";
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
   return `${h}h ${m}m`;
 }
 function fmtRam(mb) {
-  return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`;
-}
-function uid() {
-  return "srv_" + Math.random().toString(36).slice(2, 7);
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`;
 }
 
-// ─── CPU Sparkline ───────────────────────────────────────────────────────────
+// ─── Sparkline ───────────────────────────────────────────────────────────────
 function Spark({ data, color = "#00ff88" }) {
-  const max = Math.max(...data, 1);
-  const w = 60, h = 24;
-  const pts = data
-    .map((v, i) => `${(i / (data.length - 1)) * w},${h - (v / max) * h}`)
-    .join(" ");
+  const max = Math.max(...data, 1), w = 56, h = 22;
+  if (data.length < 2) return <svg width={w} height={h} />;
+  const pts = data.map((v, i) => `${(i / (data.length - 1)) * w},${h - (v / max) * h}`).join(" ");
   return (
     <svg width={w} height={h} style={{ display: "block" }}>
       <polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" />
@@ -82,454 +23,547 @@ function Spark({ data, color = "#00ff88" }) {
   );
 }
 
-// ─── Mini Donut ──────────────────────────────────────────────────────────────
+// ─── Donut ───────────────────────────────────────────────────────────────────
 function Donut({ pct, color, size = 40 }) {
   const r = 14, c = size / 2, circ = 2 * Math.PI * r;
-  const dash = (pct / 100) * circ;
+  const dash = (Math.min(pct, 100) / 100) * circ;
   return (
     <svg width={size} height={size}>
       <circle cx={c} cy={c} r={r} fill="none" stroke="#1a1a1a" strokeWidth="4" />
-      <circle
-        cx={c} cy={c} r={r} fill="none"
-        stroke={color} strokeWidth="4"
-        strokeDasharray={`${dash} ${circ}`}
-        strokeLinecap="round"
-        transform={`rotate(-90 ${c} ${c})`}
-        style={{ transition: "stroke-dasharray 0.6s ease" }}
-      />
-      <text x={c} y={c + 4} textAnchor="middle" fontSize="9" fill="#ccc" fontFamily="monospace">
-        {pct}%
-      </text>
+      <circle cx={c} cy={c} r={r} fill="none" stroke={color} strokeWidth="4"
+        strokeDasharray={`${dash} ${circ}`} strokeLinecap="round"
+        transform={`rotate(-90 ${c} ${c})`} style={{ transition: "stroke-dasharray 0.5s ease" }} />
+      <text x={c} y={c + 4} textAnchor="middle" fontSize="9" fill="#ccc" fontFamily="monospace">{Math.round(pct)}%</text>
     </svg>
+  );
+}
+
+// ─── Auth Screen ─────────────────────────────────────────────────────────────
+function AuthScreen({ onAuth }) {
+  const [mode, setMode] = useState("login");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const submit = async () => {
+    setError(""); setLoading(true);
+    try {
+      const res = mode === "login"
+        ? await authApi.login(email, password)
+        : await authApi.register(name, email, password);
+      authApi.save(res.token);
+      onAuth(res.user);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const inp = {
+    width: "100%", background: "#0a0a0a", border: "1px solid #2a2a2a",
+    borderRadius: "4px", padding: "10px 12px", color: "#fff",
+    fontFamily: "inherit", fontSize: "14px", outline: "none",
+    boxSizing: "border-box", marginBottom: "10px",
+  };
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#080808", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Mono','Fira Mono',monospace", padding: "16px" }}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&display=swap'); * { box-sizing: border-box; }`}</style>
+      <div style={{ width: "100%", maxWidth: "360px" }}>
+        <div style={{ textAlign: "center", marginBottom: "32px" }}>
+          <div style={{ width: "10px", height: "10px", borderRadius: "50%", background: "#00ff88", boxShadow: "0 0 12px #00ff88", margin: "0 auto 12px" }} />
+          <div style={{ fontSize: "22px", fontWeight: "700", letterSpacing: "4px", color: "#fff" }}>DAMINIHOST</div>
+          <div style={{ fontSize: "11px", color: "#444", marginTop: "4px", letterSpacing: "1px" }}>by Damini Codesphere</div>
+        </div>
+        <div style={{ background: "#0f0f0f", border: "1px solid #1e1e1e", borderRadius: "8px", padding: "24px" }}>
+          <div style={{ display: "flex", marginBottom: "20px", borderBottom: "1px solid #1a1a1a" }}>
+            {["login", "register"].map(m => (
+              <button key={m} onClick={() => { setMode(m); setError(""); }} style={{
+                flex: 1, padding: "8px", background: "transparent", border: "none",
+                borderBottom: mode === m ? "2px solid #00ff88" : "2px solid transparent",
+                color: mode === m ? "#00ff88" : "#555", fontFamily: "inherit",
+                fontSize: "12px", fontWeight: "600", cursor: "pointer", letterSpacing: "1px", textTransform: "uppercase"
+              }}>{m}</button>
+            ))}
+          </div>
+          {mode === "register" && (
+            <input style={inp} placeholder="Name" value={name} onChange={e => setName(e.target.value)} />
+          )}
+          <input style={inp} placeholder="Email" type="email" value={email} onChange={e => setEmail(e.target.value)} />
+          <input style={inp} placeholder="Password" type="password" value={password} onChange={e => setPassword(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && submit()} />
+          {error && <div style={{ color: "#ff6b6b", fontSize: "12px", marginBottom: "10px" }}>{error}</div>}
+          <button onClick={submit} disabled={loading} style={{
+            width: "100%", padding: "10px", background: loading ? "#006644" : "#00ff88",
+            border: "none", borderRadius: "4px", color: "#000", fontFamily: "inherit",
+            fontSize: "13px", fontWeight: "700", cursor: loading ? "not-allowed" : "pointer", letterSpacing: "1px"
+          }}>
+            {loading ? "..." : mode === "login" ? "LOGIN" : "CREATE ACCOUNT"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
 // ─── Main App ────────────────────────────────────────────────────────────────
 export default function DaminiHost() {
-  const [servers, setServers] = useState(INITIAL_SERVERS);
-  const [active, setActive] = useState("srv_001");
-  const [tab, setTab] = useState("console"); // console | files | settings
-  const [logs, setLogs] = useState([...FAKE_LOGS]);
-  const [cpuHistory, setCpuHistory] = useState({
-    srv_001: Array(12).fill(0).map(() => Math.floor(Math.random() * 20 + 5)),
-    srv_002: Array(12).fill(0),
-    srv_003: Array(12).fill(0).map(() => Math.floor(Math.random() * 12 + 2)),
-  });
+  const [user, setUser] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [servers, setServers] = useState([]);
+  const [activeId, setActiveId] = useState(null);
+  const [tab, setTab] = useState("console");
+  const [logs, setLogs] = useState([]);
+  const [cpuHistory, setCpuHistory] = useState({});
   const [showNew, setShowNew] = useState(false);
   const [newName, setNewName] = useState("");
-  const [uploadName, setUploadName] = useState("");
+  const [newCmd, setNewCmd] = useState("node index.js");
+  const [newNode, setNewNode] = useState("20.x LTS");
   const [consoleInput, setConsoleInput] = useState("");
-  const [planFilter, setPlanFilter] = useState("all");
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [files, setFiles] = useState([]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState("");
+  const [toastMsg, setToastMsg] = useState("");
+  const [loadingServers, setLoadingServers] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [mobileView, setMobileView] = useState("list"); // list | detail
+
   const logsEnd = useRef(null);
-  const logInterval = useRef(null);
+  const sseRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const pollRef = useRef(null);
 
-  const activeServer = servers.find((s) => s.id === active);
+  const activeServer = servers.find(s => s.id === activeId);
 
-  // Live log ticker
+  // ── Resize detection ────────────────────────────────────────────────────────
   useEffect(() => {
-    if (activeServer?.status === "running") {
-      logInterval.current = setInterval(() => {
-        const line = FAKE_LOGS[Math.floor(Math.random() * FAKE_LOGS.length)];
-        setLogs((prev) => [...prev.slice(-200), `[${new Date().toLocaleTimeString()}] ${line}`]);
-      }, 1800);
-    }
-    return () => clearInterval(logInterval.current);
-  }, [active, activeServer?.status]);
+    const handle = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener("resize", handle);
+    return () => window.removeEventListener("resize", handle);
+  }, []);
 
-  // Scroll logs
+  // ── Auth check ──────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (authApi.token()) {
+      authApi.me().then(u => { setUser(u); setAuthChecked(true); }).catch(() => { authApi.clear(); setAuthChecked(true); });
+    } else {
+      setAuthChecked(true);
+    }
+  }, []);
+
+  // ── Toast ───────────────────────────────────────────────────────────────────
+  const toast = (msg) => {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg(""), 3000);
+  };
+
+  // ── Load servers ────────────────────────────────────────────────────────────
+  const loadServers = useCallback(async () => {
+    if (!user) return;
+    try {
+      const list = await serversApi.list();
+      setServers(list);
+      if (!activeId && list.length > 0) setActiveId(list[0].id);
+    } catch (e) { console.error(e); }
+  }, [user, activeId]);
+
+  useEffect(() => {
+    if (user) { setLoadingServers(true); loadServers().finally(() => setLoadingServers(false)); }
+  }, [user]);
+
+  // ── Poll server stats every 5s ──────────────────────────────────────────────
+  useEffect(() => {
+    if (!user) return;
+    pollRef.current = setInterval(async () => {
+      try {
+        const list = await serversApi.list();
+        setServers(list);
+        list.forEach(s => {
+          if (s.status === "running") {
+            setCpuHistory(prev => ({
+              ...prev,
+              [s.id]: [...(prev[s.id] || []).slice(-19), s.cpu || 0]
+            }));
+          }
+        });
+      } catch (_) {}
+    }, 5000);
+    return () => clearInterval(pollRef.current);
+  }, [user]);
+
+  // ── SSE logs ────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (sseRef.current) { sseRef.current.close(); sseRef.current = null; }
+    setLogs([]);
+    if (!activeId) return;
+
+    const es = serversApi.logs(activeId);
+    sseRef.current = es;
+
+    es.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.type === "log" || data.type === "exit") {
+          setLogs(prev => [...prev.slice(-500), data.line ?? `Process exited (code ${data.code})`]);
+        }
+      } catch (_) {}
+    };
+    es.onerror = () => {};
+
+    return () => { es.close(); };
+  }, [activeId]);
+
+  // ── Scroll logs ─────────────────────────────────────────────────────────────
   useEffect(() => {
     logsEnd.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs]);
 
-  // CPU/RAM tick
+  // ── Load files when Files tab opens ────────────────────────────────────────
   useEffect(() => {
-    const t = setInterval(() => {
-      setServers((prev) =>
-        prev.map((s) => {
-          if (s.status !== "running") return s;
-          const cpuDelta = (Math.random() - 0.4) * 6;
-          const ramDelta = (Math.random() - 0.4) * 10;
-          return {
-            ...s,
-            cpu: Math.max(1, Math.min(99, s.cpu + cpuDelta)),
-            ram: Math.max(40, Math.min(512, s.ram + ramDelta)),
-            uptime: s.uptime + 2,
-          };
-        })
-      );
-      setCpuHistory((prev) => {
-        const next = { ...prev };
-        servers.forEach((s) => {
-          if (s.status === "running") {
-            next[s.id] = [...(prev[s.id] || []).slice(-11), Math.round(s.cpu)];
-          }
-        });
-        return next;
-      });
-    }, 2000);
-    return () => clearInterval(t);
-  }, [servers]);
+    if (tab === "files" && activeId) {
+      serversApi.files(activeId).then(setFiles).catch(() => setFiles([]));
+    }
+  }, [tab, activeId]);
 
-  const toggleServer = useCallback((id) => {
-    setServers((prev) =>
-      prev.map((s) => {
-        if (s.id !== id) return s;
-        const starting = s.status !== "running";
-        if (starting) {
-          setLogs([
-            `[${new Date().toLocaleTimeString()}] > npm install...`,
-            `[${new Date().toLocaleTimeString()}] > added 148 packages in 3.2s`,
-            `[${new Date().toLocaleTimeString()}] > node index.js`,
-            `[${new Date().toLocaleTimeString()}] > Server started on port ${s.port}`,
-          ]);
-        } else {
-          setLogs((p) => [...p, `[${new Date().toLocaleTimeString()}] > Process killed. Exit code 0`]);
-        }
-        return {
-          ...s,
-          status: starting ? "running" : "stopped",
-          cpu: starting ? 8 : 0,
-          ram: starting ? 120 : 0,
-          uptime: starting ? 0 : 0,
-        };
-      })
-    );
-  }, []);
+  // ── Select server ───────────────────────────────────────────────────────────
+  const selectServer = (id) => {
+    setActiveId(id);
+    setTab("console");
+    setLogs([]);
+    if (isMobile) { setSidebarOpen(false); setMobileView("detail"); }
+  };
 
-  const createServer = () => {
+  // ── Create server ───────────────────────────────────────────────────────────
+  const createServer = async () => {
     if (!newName.trim()) return;
-    const id = uid();
-    setServers((prev) => [
-      ...prev,
-      {
-        id,
-        name: newName.trim(),
-        status: "stopped",
-        ram: 0,
-        cpu: 0,
-        uptime: 0,
-        port: 3000 + prev.length + 1,
-        files: ["index.js", "package.json"],
-      },
-    ]);
-    setCpuHistory((prev) => ({ ...prev, [id]: Array(12).fill(0) }));
-    setNewName("");
-    setShowNew(false);
-    setActive(id);
+    try {
+      const s = await serversApi.create(newName.trim(), newCmd, newNode);
+      setServers(prev => [...prev, s]);
+      setActiveId(s.id);
+      setShowNew(false);
+      setNewName(""); setNewCmd("node index.js"); setNewNode("20.x LTS");
+      setTab("files");
+      if (isMobile) setMobileView("detail");
+      toast("Server created — upload your files next");
+    } catch (e) { toast("Error: " + e.message); }
   };
 
-  const deleteServer = (id) => {
-    setServers((prev) => prev.filter((s) => s.id !== id));
-    if (active === id) setActive(servers.find((s) => s.id !== id)?.id);
+  // ── Delete server ────────────────────────────────────────────────────────────
+  const deleteServer = async (id) => {
+    if (!confirm("Delete this server and all its files?")) return;
+    try {
+      await serversApi.delete(id);
+      const remaining = servers.filter(s => s.id !== id);
+      setServers(remaining);
+      if (activeId === id) {
+        setActiveId(remaining[0]?.id ?? null);
+        if (isMobile) setMobileView("list");
+      }
+      toast("Server deleted");
+    } catch (e) { toast("Error: " + e.message); }
   };
 
-  const sendCommand = (e) => {
-    e.preventDefault();
-    if (!consoleInput.trim()) return;
-    setLogs((prev) => [
-      ...prev,
-      `[${new Date().toLocaleTimeString()}] $ ${consoleInput}`,
-      `[${new Date().toLocaleTimeString()}] > command not found: ${consoleInput.split(" ")[0]}`,
-    ]);
-    setConsoleInput("");
+  // ── Start / Stop ─────────────────────────────────────────────────────────────
+  const startServer = async () => {
+    if (!activeId || actionLoading) return;
+    setActionLoading(true);
+    try {
+      await serversApi.start(activeId);
+      toast("Starting...");
+      setTimeout(loadServers, 2000);
+    } catch (e) { toast("Error: " + e.message); }
+    finally { setActionLoading(false); }
   };
 
-  const totalRunning = servers.filter((s) => s.status === "running").length;
-  const totalRam = servers.reduce((a, s) => a + s.ram, 0);
+  const stopServer = async () => {
+    if (!activeId || actionLoading) return;
+    setActionLoading(true);
+    try {
+      await serversApi.stop(activeId);
+      toast("Stopped");
+      setTimeout(loadServers, 1000);
+    } catch (e) { toast("Error: " + e.message); }
+    finally { setActionLoading(false); }
+  };
 
-  // ── Styles ────────────────────────────────────────────────────────────────
-  const css = {
-    root: {
-      fontFamily: "'DM Mono', 'Fira Mono', monospace",
-      background: "#080808",
-      color: "#e0e0e0",
-      minHeight: "100vh",
-      display: "flex",
-      flexDirection: "column",
-      fontSize: "13px",
-    },
-    topbar: {
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "space-between",
-      padding: "0 20px",
-      height: "48px",
-      borderBottom: "1px solid #1e1e1e",
-      background: "#0c0c0c",
-      position: "sticky",
-      top: 0,
-      zIndex: 100,
-    },
-    logo: {
-      fontSize: "15px",
-      fontWeight: "700",
-      letterSpacing: "3px",
-      textTransform: "uppercase",
-      color: "#fff",
-      display: "flex",
-      alignItems: "center",
-      gap: "8px",
-    },
-    logoDot: {
-      width: "8px",
-      height: "8px",
-      borderRadius: "50%",
-      background: "#00ff88",
-      boxShadow: "0 0 8px #00ff88",
-      animation: "pulse 2s infinite",
-    },
-    topRight: { display: "flex", alignItems: "center", gap: "16px" },
-    badge: (color) => ({
-      padding: "2px 8px",
-      borderRadius: "3px",
-      fontSize: "11px",
-      background: color + "22",
-      color: color,
-      border: `1px solid ${color}44`,
-      fontWeight: "600",
+  // ── Upload ───────────────────────────────────────────────────────────────────
+  const handleFileSelect = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !activeId) return;
+    if (!file.name.endsWith(".zip")) { toast("Only .zip files allowed"); return; }
+    setUploading(true);
+    setUploadProgress("Uploading...");
+    try {
+      const res = await serversApi.upload(activeId, file);
+      setFiles(res.files || []);
+      toast("Upload complete ✓");
+      setUploadProgress("");
+    } catch (e) {
+      toast("Upload failed: " + e.message);
+      setUploadProgress("");
+    } finally {
+      setUploading(false);
+      e.target.value = "";
+    }
+  };
+
+  const handleDeleteFile = async (filename) => {
+    if (!confirm(`Delete ${filename}?`)) return;
+    try {
+      await serversApi.deleteFile(activeId, filename);
+      setFiles(prev => prev.filter(f => f.name !== filename));
+      toast("File deleted");
+    } catch (e) { toast("Error: " + e.message); }
+  };
+
+  // ── Logout ───────────────────────────────────────────────────────────────────
+  const logout = () => { authApi.clear(); setUser(null); setServers([]); setActiveId(null); };
+
+  // ── Render guards ────────────────────────────────────────────────────────────
+  if (!authChecked) return <div style={{ background: "#080808", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: "#333", fontFamily: "monospace" }}>loading...</div>;
+  if (!user) return <AuthScreen onAuth={u => setUser(u)} />;
+
+  const totalRunning = servers.filter(s => s.status === "running").length;
+  const totalRam = servers.reduce((a, s) => a + (s.ram || 0), 0);
+
+  // ── Styles ───────────────────────────────────────────────────────────────────
+  const S = {
+    btn: (v = "ghost") => ({
+      padding: "7px 14px", borderRadius: "4px", fontSize: "12px", fontWeight: "600",
+      fontFamily: "inherit", cursor: "pointer", letterSpacing: "0.5px",
+      border: v === "primary" ? "none" : "1px solid #2a2a2a",
+      background: v === "primary" ? "#00ff88" : v === "danger" ? "#ff444418" : "#141414",
+      color: v === "primary" ? "#000" : v === "danger" ? "#ff6b6b" : "#ccc",
+      transition: "opacity 0.15s", whiteSpace: "nowrap",
     }),
-    body: { display: "flex", flex: 1, overflow: "hidden", height: "calc(100vh - 48px)" },
-    sidebar: {
-      width: sidebarOpen ? "220px" : "0",
-      minWidth: sidebarOpen ? "220px" : "0",
-      borderRight: "1px solid #1a1a1a",
-      background: "#0a0a0a",
-      overflowY: "auto",
-      overflowX: "hidden",
-      transition: "all 0.2s",
-      display: "flex",
-      flexDirection: "column",
-    },
-    sideSection: { padding: "12px 14px 4px", fontSize: "10px", color: "#444", letterSpacing: "2px", textTransform: "uppercase" },
-    sideItem: (isActive) => ({
-      display: "flex",
-      alignItems: "center",
-      gap: "8px",
-      padding: "8px 14px",
-      cursor: "pointer",
-      background: isActive ? "#141414" : "transparent",
-      borderLeft: isActive ? "2px solid #00ff88" : "2px solid transparent",
-      color: isActive ? "#fff" : "#666",
-      transition: "all 0.15s",
-      whiteSpace: "nowrap",
-    }),
-    statusDot: (status) => ({
-      width: "6px",
-      height: "6px",
-      borderRadius: "50%",
-      background: status === "running" ? "#00ff88" : "#333",
+    dot: (status) => ({
+      width: "7px", height: "7px", borderRadius: "50%", flexShrink: 0,
+      background: status === "running" ? "#00ff88" : "#2a2a2a",
       boxShadow: status === "running" ? "0 0 6px #00ff88" : "none",
-      flexShrink: 0,
     }),
-    main: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" },
-    panelHead: {
-      padding: "16px 20px",
-      borderBottom: "1px solid #1a1a1a",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "space-between",
-      background: "#0c0c0c",
+    inp: {
+      background: "#0a0a0a", border: "1px solid #2a2a2a", borderRadius: "4px",
+      padding: "8px 12px", color: "#fff", fontFamily: "inherit", fontSize: "13px",
+      outline: "none", width: "100%", boxSizing: "border-box",
     },
-    h2: { fontSize: "16px", fontWeight: "700", letterSpacing: "1px", color: "#fff" },
-    btn: (variant = "ghost") => ({
-      padding: "6px 14px",
-      borderRadius: "4px",
-      fontSize: "12px",
-      fontWeight: "600",
-      fontFamily: "inherit",
-      cursor: "pointer",
-      border: variant === "primary" ? "none" : "1px solid #2a2a2a",
-      background: variant === "primary" ? "#00ff88" : variant === "danger" ? "#ff444422" : "#141414",
-      color: variant === "primary" ? "#000" : variant === "danger" ? "#ff4444" : "#ccc",
-      transition: "all 0.15s",
-      letterSpacing: "0.5px",
+    tab: (a) => ({
+      padding: isMobile ? "10px 14px" : "9px 16px", fontSize: "12px", fontFamily: "inherit",
+      cursor: "pointer", background: "transparent", border: "none",
+      borderBottom: a ? "2px solid #00ff88" : "2px solid transparent",
+      color: a ? "#00ff88" : "#555", fontWeight: a ? "600" : "400",
+      transition: "all 0.15s", letterSpacing: "0.5px", whiteSpace: "nowrap",
     }),
-    statsRow: {
-      display: "flex",
-      gap: "0",
-      borderBottom: "1px solid #1a1a1a",
-      background: "#0a0a0a",
-    },
-    statCard: {
-      flex: 1,
-      padding: "14px 20px",
-      borderRight: "1px solid #1a1a1a",
-    },
-    statLabel: { fontSize: "10px", color: "#444", letterSpacing: "2px", textTransform: "uppercase", marginBottom: "4px" },
-    statVal: { fontSize: "20px", fontWeight: "700", color: "#fff" },
-    statSub: { fontSize: "11px", color: "#555", marginTop: "2px" },
-    content: { flex: 1, display: "flex", overflow: "hidden" },
-    serverPanel: {
-      flex: 1,
-      display: "flex",
-      flexDirection: "column",
-      overflow: "hidden",
-    },
-    serverHead: {
-      padding: "14px 20px",
-      borderBottom: "1px solid #1a1a1a",
-      display: "flex",
-      alignItems: "center",
-      gap: "12px",
-      background: "#0c0c0c",
-    },
-    tabs: {
-      display: "flex",
-      gap: "0",
-      borderBottom: "1px solid #1a1a1a",
-      background: "#0a0a0a",
-    },
-    tabBtn: (isActive) => ({
-      padding: "10px 18px",
-      fontSize: "12px",
-      fontFamily: "inherit",
-      cursor: "pointer",
-      background: "transparent",
-      border: "none",
-      borderBottom: isActive ? "2px solid #00ff88" : "2px solid transparent",
-      color: isActive ? "#00ff88" : "#555",
-      fontWeight: isActive ? "600" : "400",
-      transition: "all 0.15s",
-      letterSpacing: "0.5px",
-    }),
-    console: {
-      flex: 1,
-      background: "#060606",
-      overflowY: "auto",
-      padding: "14px 16px",
-      fontFamily: "'DM Mono', monospace",
-      fontSize: "12px",
-      lineHeight: "1.7",
-    },
-    logLine: (line) => ({
-      color: line.includes("Error") || line.includes("error") || line.includes("kill")
-        ? "#ff6b6b"
-        : line.includes("warn") || line.includes("rate limit")
-        ? "#ffcc44"
-        : line.includes("ready") || line.includes("success") || line.includes("OK")
-        ? "#00ff88"
-        : "#7a7a7a",
-      margin: 0,
-    }),
-    consoleInput: {
-      display: "flex",
-      alignItems: "center",
-      gap: "8px",
-      padding: "10px 16px",
-      borderTop: "1px solid #1a1a1a",
-      background: "#0a0a0a",
-    },
-    input: {
-      flex: 1,
-      background: "transparent",
-      border: "none",
-      outline: "none",
-      color: "#00ff88",
-      fontFamily: "inherit",
-      fontSize: "12px",
-    },
-    fileList: {
-      flex: 1,
-      padding: "16px",
-      overflowY: "auto",
-    },
-    fileRow: {
-      display: "flex",
-      alignItems: "center",
-      gap: "10px",
-      padding: "8px 12px",
-      borderRadius: "4px",
-      marginBottom: "4px",
-      background: "#0f0f0f",
-      border: "1px solid #1a1a1a",
-      cursor: "pointer",
-      transition: "border-color 0.15s",
-    },
-    uploadZone: {
-      margin: "16px",
-      padding: "24px",
-      border: "1px dashed #2a2a2a",
-      borderRadius: "6px",
-      textAlign: "center",
-      color: "#444",
-      cursor: "pointer",
-      transition: "all 0.15s",
-    },
-    settingsBlock: {
-      flex: 1,
-      padding: "20px",
-      overflowY: "auto",
-    },
-    settingsRow: {
-      display: "flex",
-      justifyContent: "space-between",
-      alignItems: "center",
-      padding: "12px 0",
-      borderBottom: "1px solid #141414",
-    },
-    settingsLabel: { color: "#888", fontSize: "12px" },
-    settingsVal: { color: "#ccc", fontFamily: "inherit" },
-    modal: {
-      position: "fixed",
-      inset: 0,
-      background: "#000000cc",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      zIndex: 999,
-    },
-    modalBox: {
-      background: "#111",
-      border: "1px solid #2a2a2a",
-      borderRadius: "8px",
-      padding: "24px",
-      width: "340px",
-    },
-    modalInput: {
-      width: "100%",
-      background: "#0a0a0a",
-      border: "1px solid #2a2a2a",
-      borderRadius: "4px",
-      padding: "8px 12px",
-      color: "#fff",
-      fontFamily: "inherit",
-      fontSize: "13px",
-      outline: "none",
-      boxSizing: "border-box",
-      marginBottom: "12px",
-    },
-    rightPanel: {
-      width: "240px",
-      borderLeft: "1px solid #1a1a1a",
-      background: "#0a0a0a",
-      display: "flex",
-      flexDirection: "column",
-      overflowY: "auto",
-    },
-    metricBox: {
-      padding: "14px 16px",
-      borderBottom: "1px solid #141414",
-    },
-    metricLabel: { fontSize: "10px", color: "#444", letterSpacing: "2px", textTransform: "uppercase", marginBottom: "8px" },
-    serverList: {
-      padding: "10px",
-      gap: "8px",
-      display: "flex",
-      flexDirection: "column",
-    },
-    serverCard: (isActive) => ({
-      padding: "12px",
-      borderRadius: "6px",
-      border: isActive ? "1px solid #00ff8844" : "1px solid #1a1a1a",
-      background: isActive ? "#0d1a12" : "#0f0f0f",
-      cursor: "pointer",
-      transition: "all 0.15s",
+    logLine: (line = "") => ({
+      color: /error|Error|kill|fail/i.test(line) ? "#ff6b6b"
+        : /warn|rate.limit/i.test(line) ? "#ffcc44"
+        : /ready|success|\bOK\b|complete|✓/i.test(line) ? "#00ff88"
+        : "#6a6a6a",
+      margin: 0, lineHeight: "1.65", wordBreak: "break-all",
     }),
   };
 
+  // ── Sidebar content ──────────────────────────────────────────────────────────
+  const SidebarContent = () => (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflowY: "auto" }}>
+      <div style={{ padding: "10px 14px 4px", fontSize: "10px", color: "#3a3a3a", letterSpacing: "2px", textTransform: "uppercase" }}>Servers</div>
+      {loadingServers && <div style={{ padding: "12px 14px", color: "#3a3a3a", fontSize: "12px" }}>loading...</div>}
+      {servers.map(s => (
+        <div key={s.id} onClick={() => selectServer(s.id)} style={{
+          display: "flex", alignItems: "center", gap: "8px", padding: "10px 14px",
+          cursor: "pointer", background: activeId === s.id ? "#141414" : "transparent",
+          borderLeft: activeId === s.id ? "2px solid #00ff88" : "2px solid transparent",
+          color: activeId === s.id ? "#fff" : "#666", transition: "all 0.15s",
+        }}>
+          <div style={S.dot(s.status)} />
+          <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: "13px" }}>{s.name}</span>
+        </div>
+      ))}
+      {servers.length === 0 && !loadingServers && (
+        <div style={{ padding: "12px 14px", color: "#333", fontSize: "12px" }}>No servers yet</div>
+      )}
+      <div style={{ padding: "8px 12px", marginTop: "4px" }}>
+        <button style={{ ...S.btn("primary"), width: "100%", padding: "8px" }} onClick={() => setShowNew(true)}>+ New Server</button>
+      </div>
+      <div style={{ marginTop: "auto", borderTop: "1px solid #141414" }}>
+        <div style={{ padding: "10px 14px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span style={{ fontSize: "12px", color: "#555", overflow: "hidden", textOverflow: "ellipsis" }}>{user.name}</span>
+          <button onClick={logout} style={{ ...S.btn(), padding: "4px 8px", fontSize: "11px" }}>logout</button>
+        </div>
+        <div style={{ padding: "4px 14px 12px", fontSize: "10px", color: "#2a2a2a" }}>DaminiHost · Damini Codesphere</div>
+      </div>
+    </div>
+  );
+
+  // ── Server detail panel ──────────────────────────────────────────────────────
+  const DetailPanel = () => {
+    if (!activeServer) return (
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#2a2a2a", gap: "12px" }}>
+        <div style={{ fontSize: "32px" }}>◻</div>
+        <div style={{ fontSize: "13px", letterSpacing: "1px" }}>Select or create a server</div>
+        <button style={S.btn("primary")} onClick={() => setShowNew(true)}>+ New Server</button>
+      </div>
+    );
+
+    const isRunning = activeServer.status === "running";
+
+    return (
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
+        {/* Server header */}
+        <div style={{ padding: isMobile ? "10px 14px" : "12px 20px", borderBottom: "1px solid #1a1a1a", background: "#0c0c0c", display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", gap: "8px" }}>
+          {isMobile && (
+            <button onClick={() => setMobileView("list")} style={{ ...S.btn(), padding: "5px 8px", fontSize: "14px", marginRight: "2px" }}>←</button>
+          )}
+          <div style={S.dot(activeServer.status)} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: "14px", fontWeight: "700", color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{activeServer.name}</div>
+            <div style={{ fontSize: "10px", color: "#444", marginTop: "1px" }}>uptime {fmtUptime(activeServer.uptime)}</div>
+          </div>
+          <div style={{ display: "flex", gap: "6px", flexShrink: 0 }}>
+            <button disabled={actionLoading} onClick={isRunning ? stopServer : startServer}
+              style={{ ...S.btn(isRunning ? "danger" : "primary"), opacity: actionLoading ? 0.5 : 1 }}>
+              {actionLoading ? "..." : isRunning ? "⬛ Stop" : "▶ Start"}
+            </button>
+            {!isMobile && (
+              <button onClick={() => deleteServer(activeServer.id)} style={{ ...S.btn("danger"), padding: "7px 10px" }}>🗑</button>
+            )}
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div style={{ display: "flex", borderBottom: "1px solid #1a1a1a", background: "#0a0a0a", overflowX: "auto" }}>
+          {[["console", "⌨ Console"], ["files", "📁 Files"], ["metrics", "📊 Metrics"], ["settings", "⚙ Settings"]].map(([t, label]) => (
+            <button key={t} style={S.tab(tab === t)} onClick={() => setTab(t)}>{label}</button>
+          ))}
+        </div>
+
+        {/* Console tab */}
+        {tab === "console" && (
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            <div style={{ flex: 1, overflowY: "auto", padding: "12px 14px", background: "#060606", fontFamily: "'DM Mono',monospace", fontSize: isMobile ? "11px" : "12px" }}>
+              {logs.length === 0 && (
+                <div style={{ color: "#2a2a2a" }}>
+                  {isRunning ? "— waiting for output —" : "— server stopped · press Start —"}
+                </div>
+              )}
+              {logs.map((l, i) => <p key={i} style={S.logLine(l)}>{l}</p>)}
+              {isRunning && <span style={{ color: "#00ff88", animation: "blink 1s infinite" }}>█</span>}
+              <div ref={logsEnd} />
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 12px", borderTop: "1px solid #1a1a1a", background: "#0a0a0a" }}>
+              <span style={{ color: "#333" }}>$</span>
+              <input style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: "#00ff88", fontFamily: "inherit", fontSize: "12px" }}
+                value={consoleInput} onChange={e => setConsoleInput(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === "Enter" && consoleInput.trim()) {
+                    setLogs(p => [...p, `$ ${consoleInput}`]);
+                    setConsoleInput("");
+                  }
+                }}
+                placeholder={isRunning ? "type command..." : "start server first"}
+                disabled={!isRunning} />
+            </div>
+          </div>
+        )}
+
+        {/* Files tab */}
+        {tab === "files" && (
+          <div style={{ flex: 1, overflowY: "auto" }}>
+            {/* Upload button — works on phone AND PC, click only, no drag */}
+            <div style={{ padding: "14px 14px 0" }}>
+              <input ref={fileInputRef} type="file" accept=".zip" style={{ display: "none" }} onChange={handleFileSelect} />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading}
+                style={{
+                  ...S.btn("primary"), width: "100%", padding: "12px",
+                  fontSize: "13px", opacity: uploading ? 0.6 : 1,
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: "8px",
+                }}>
+                {uploading ? `⟳ ${uploadProgress}` : "⬆ Upload .zip file"}
+              </button>
+              <div style={{ fontSize: "11px", color: "#3a3a3a", textAlign: "center", marginTop: "6px" }}>
+                Tap to select from your device
+              </div>
+            </div>
+            <div style={{ padding: "12px 14px" }}>
+              {files.length === 0 && (
+                <div style={{ color: "#2a2a2a", fontSize: "12px", textAlign: "center", padding: "20px 0" }}>
+                  No files uploaded yet
+                </div>
+              )}
+              {files.map((f, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: "10px", padding: "9px 12px", borderRadius: "4px", marginBottom: "4px", background: "#0f0f0f", border: "1px solid #1a1a1a" }}>
+                  <span style={{ color: f.isDir ? "#7c6aff" : "#00ff88", fontSize: "14px" }}>{f.isDir ? "📁" : "📄"}</span>
+                  <span style={{ flex: 1, fontSize: "12px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</span>
+                  <span style={{ color: "#333", fontSize: "11px", flexShrink: 0 }}>{f.isDir ? "dir" : `${Math.round((f.size || 0) / 1024)}KB`}</span>
+                  {!f.isDir && (
+                    <button onClick={() => handleDeleteFile(f.name)} style={{ ...S.btn("danger"), padding: "2px 6px", fontSize: "11px", flexShrink: 0 }}>✕</button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Metrics tab */}
+        {tab === "metrics" && (
+          <div style={{ flex: 1, overflowY: "auto", padding: "14px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "1fr 1fr 1fr", gap: "10px", marginBottom: "16px" }}>
+              {[
+                { label: "CPU", val: `${Math.round(activeServer.cpu || 0)}%`, color: "#00ff88" },
+                { label: "Memory", val: fmtRam(activeServer.ram || 0), color: "#7c6aff" },
+                { label: "Uptime", val: fmtUptime(activeServer.uptime), color: "#ffcc44" },
+              ].map(m => (
+                <div key={m.label} style={{ background: "#0f0f0f", border: "1px solid #1a1a1a", borderRadius: "6px", padding: "14px" }}>
+                  <div style={{ fontSize: "10px", color: "#444", letterSpacing: "2px", textTransform: "uppercase", marginBottom: "8px" }}>{m.label}</div>
+                  <div style={{ fontSize: "20px", fontWeight: "700", color: m.color }}>{m.val}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ background: "#0f0f0f", border: "1px solid #1a1a1a", borderRadius: "6px", padding: "14px" }}>
+              <div style={{ fontSize: "10px", color: "#444", letterSpacing: "2px", textTransform: "uppercase", marginBottom: "10px" }}>CPU History</div>
+              <div style={{ display: "flex", alignItems: "flex-end", gap: "2px", height: "60px" }}>
+                {(cpuHistory[activeId] || Array(20).fill(0)).map((v, i) => (
+                  <div key={i} style={{ flex: 1, background: "#00ff88", opacity: 0.7, borderRadius: "2px 2px 0 0", height: `${Math.max(2, (v / 100) * 60)}px`, transition: "height 0.3s" }} />
+                ))}
+              </div>
+              <div style={{ fontSize: "10px", color: "#2a2a2a", marginTop: "6px" }}>last 100s</div>
+            </div>
+          </div>
+        )}
+
+        {/* Settings tab */}
+        {tab === "settings" && (
+          <div style={{ flex: 1, overflowY: "auto", padding: "14px" }}>
+            {[
+              ["Name", activeServer.name],
+              ["Server ID", activeServer.id],
+              ["Start Command", activeServer.startCmd || "node index.js"],
+              ["Node Version", activeServer.nodeVersion || "20.x"],
+              ["Status", activeServer.status],
+            ].map(([k, v]) => (
+              <div key={k} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "11px 0", borderBottom: "1px solid #141414", gap: "12px" }}>
+                <span style={{ color: "#555", fontSize: "12px", flexShrink: 0 }}>{k}</span>
+                <span style={{ color: "#ccc", fontSize: "12px", textAlign: "right", wordBreak: "break-all" }}>{v}</span>
+              </div>
+            ))}
+            <div style={{ marginTop: "20px" }}>
+              <button onClick={() => deleteServer(activeServer.id)} style={{ ...S.btn("danger"), width: "100%", padding: "10px" }}>Delete Server</button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // ── Root render ──────────────────────────────────────────────────────────────
   return (
-    <div style={css.root}>
+    <div style={{ fontFamily: "'DM Mono','Fira Mono',monospace", background: "#080808", color: "#e0e0e0", height: "100dvh", display: "flex", flexDirection: "column", fontSize: "13px", overflow: "hidden" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&display=swap');
         * { box-sizing: border-box; }
@@ -538,294 +572,117 @@ export default function DaminiHost() {
         ::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 2px; }
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
         @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
-        .srv-card:hover { border-color: #2a2a2a !important; }
-        .btn-hover:hover { opacity: 0.85; }
-        .file-row:hover { border-color: #2a2a2a !important; }
-        .side-item:hover { color: #bbb !important; }
-        .upload-zone:hover { border-color: #444 !important; color: #666 !important; }
+        button:hover { opacity: 0.85; }
       `}</style>
 
-      {/* ── Topbar ── */}
-      <div style={css.topbar}>
-        <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
-          <button onClick={() => setSidebarOpen(!sidebarOpen)} style={{ ...css.btn(), padding: "4px 8px", fontSize: "16px" }}>
-            ☰
-          </button>
-          <div style={css.logo}>
-            <div style={css.logoDot} />
-            DAMINIHOST
+      {/* Toast */}
+      {toastMsg && (
+        <div style={{ position: "fixed", bottom: "20px", left: "50%", transform: "translateX(-50%)", background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: "6px", padding: "10px 18px", fontSize: "12px", color: "#ccc", zIndex: 9999, whiteSpace: "nowrap", boxShadow: "0 4px 20px #000a" }}>
+          {toastMsg}
+        </div>
+      )}
+
+      {/* Topbar */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 14px", height: "48px", borderBottom: "1px solid #1a1a1a", background: "#0c0c0c", flexShrink: 0, zIndex: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          {isMobile && mobileView === "detail" ? (
+            <button onClick={() => setMobileView("list")} style={{ ...S.btn(), padding: "5px 8px", fontSize: "15px" }}>←</button>
+          ) : (
+            <button onClick={() => setSidebarOpen(o => !o)} style={{ ...S.btn(), padding: "5px 8px", fontSize: "15px" }}>☰</button>
+          )}
+          <div style={{ display: "flex", alignItems: "center", gap: "7px" }}>
+            <div style={{ width: "7px", height: "7px", borderRadius: "50%", background: "#00ff88", boxShadow: "0 0 8px #00ff88", animation: "pulse 2s infinite" }} />
+            <span style={{ fontSize: "14px", fontWeight: "700", letterSpacing: "3px", color: "#fff" }}>DAMINIHOST</span>
           </div>
         </div>
-        <div style={css.topRight}>
-          <span style={css.badge("#00ff88")}>{totalRunning} RUNNING</span>
-          <span style={css.badge("#888")}>{fmtRam(totalRam)} USED</span>
-          <span style={{ ...css.badge("#7c6aff"), letterSpacing: "1px" }}>RENDER · ZA</span>
-          <div style={{ width: "28px", height: "28px", borderRadius: "50%", background: "linear-gradient(135deg,#7c6aff,#00ff88)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "11px", fontWeight: "700", color: "#000" }}>V</div>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          {!isMobile && (
+            <>
+              <span style={{ padding: "2px 8px", borderRadius: "3px", fontSize: "11px", background: "#00ff8818", color: "#00ff88", border: "1px solid #00ff8830", fontWeight: "600" }}>{totalRunning} ON</span>
+              <span style={{ padding: "2px 8px", borderRadius: "3px", fontSize: "11px", background: "#88888818", color: "#888", border: "1px solid #88888830" }}>{fmtRam(totalRam)}</span>
+            </>
+          )}
+          <div style={{ width: "28px", height: "28px", borderRadius: "50%", background: "linear-gradient(135deg,#7c6aff,#00ff88)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "11px", fontWeight: "700", color: "#000", flexShrink: 0 }}>
+            {user.name?.[0]?.toUpperCase() || "V"}
+          </div>
         </div>
       </div>
 
-      <div style={css.body}>
-        {/* ── Sidebar ── */}
-        <div style={css.sidebar}>
-          <div style={css.sideSection}>Servers</div>
-          {servers.map((s) => (
-            <div
-              key={s.id}
-              className="side-item"
-              style={css.sideItem(active === s.id)}
-              onClick={() => { setActive(s.id); setLogs([...FAKE_LOGS]); setTab("console"); }}
-            >
-              <div style={css.statusDot(s.status)} />
-              <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>{s.name}</span>
-            </div>
-          ))}
-          <div style={{ padding: "8px 12px" }}>
-            <button style={{ ...css.btn("primary"), width: "100%", padding: "7px" }} onClick={() => setShowNew(true)}>
-              + New Server
-            </button>
-          </div>
-          <div style={{ marginTop: "auto" }}>
-            <div style={css.sideSection}>Account</div>
-            <div style={{ ...css.sideItem(false), gap: "8px" }}>
-              <span style={{ color: "#555" }}>⚙</span> Settings
-            </div>
-            <div style={{ ...css.sideItem(false), gap: "8px" }}>
-              <span style={{ color: "#555" }}>?</span> Docs
-            </div>
-            <div style={{ padding: "12px 14px", fontSize: "10px", color: "#333" }}>
-              DaminiHost by Damini Codesphere
-            </div>
-          </div>
-        </div>
+      {/* Body */}
+      <div style={{ flex: 1, display: "flex", overflow: "hidden", position: "relative" }}>
 
-        {/* ── Main ── */}
-        <div style={css.main}>
-          {/* Stats row */}
-          <div style={css.statsRow}>
-            {[
-              { label: "Total Servers", val: servers.length, sub: `${totalRunning} active` },
-              { label: "RAM Used", val: fmtRam(totalRam), sub: "512 MB limit" },
-              { label: "Avg CPU", val: Math.round(servers.filter(s=>s.status==="running").reduce((a,s)=>a+s.cpu,0) / Math.max(totalRunning,1)) + "%", sub: "across running" },
-              { label: "Region", val: "ZA-1", sub: "Cape Town / Render" },
-            ].map((s) => (
-              <div key={s.label} style={css.statCard}>
-                <div style={css.statLabel}>{s.label}</div>
-                <div style={css.statVal}>{s.val}</div>
-                <div style={css.statSub}>{s.sub}</div>
+        {/* Sidebar — desktop: permanent column; mobile: overlay drawer */}
+        {isMobile ? (
+          <>
+            {sidebarOpen && (
+              <div onClick={() => setSidebarOpen(false)} style={{ position: "absolute", inset: 0, background: "#000000aa", zIndex: 50 }} />
+            )}
+            <div style={{
+              position: "absolute", top: 0, left: 0, bottom: 0, width: "240px",
+              background: "#0a0a0a", borderRight: "1px solid #1a1a1a",
+              zIndex: 51, transform: sidebarOpen ? "translateX(0)" : "translateX(-100%)",
+              transition: "transform 0.2s ease",
+            }}>
+              <SidebarContent />
+            </div>
+            {/* Mobile: show server list OR detail */}
+            <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+              {mobileView === "list" ? (
+                <div style={{ flex: 1, overflowY: "auto" }}>
+                  <div style={{ padding: "10px 14px 4px", fontSize: "10px", color: "#3a3a3a", letterSpacing: "2px", textTransform: "uppercase" }}>Your Servers</div>
+                  {servers.map(s => (
+                    <div key={s.id} onClick={() => selectServer(s.id)} style={{ display: "flex", alignItems: "center", gap: "12px", padding: "14px 16px", borderBottom: "1px solid #111", cursor: "pointer" }}>
+                      <div style={S.dot(s.status)} />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: "14px", color: "#ddd" }}>{s.name}</div>
+                        <div style={{ fontSize: "11px", color: "#444", marginTop: "2px" }}>{s.status} · {fmtUptime(s.uptime)}</div>
+                      </div>
+                      <span style={{ color: "#333", fontSize: "18px" }}>›</span>
+                    </div>
+                  ))}
+                  {servers.length === 0 && !loadingServers && (
+                    <div style={{ padding: "40px 16px", textAlign: "center", color: "#333" }}>
+                      <div style={{ fontSize: "12px", marginBottom: "12px" }}>No servers yet</div>
+                      <button style={S.btn("primary")} onClick={() => setShowNew(true)}>+ New Server</button>
+                    </div>
+                  )}
+                  <div style={{ padding: "12px 14px" }}>
+                    <button style={{ ...S.btn("primary"), width: "100%", padding: "10px" }} onClick={() => setShowNew(true)}>+ New Server</button>
+                  </div>
+                </div>
+              ) : (
+                <DetailPanel />
+              )}
+            </div>
+          </>
+        ) : (
+          <>
+            {/* Desktop sidebar */}
+            <div style={{ width: sidebarOpen ? "0" : "220px", minWidth: sidebarOpen ? "0" : "220px", borderRight: "1px solid #1a1a1a", background: "#0a0a0a", transition: "all 0.2s", overflow: "hidden" }}>
+              <SidebarContent />
+            </div>
+            {/* Desktop main content */}
+            <div style={{ flex: 1, display: "flex", overflow: "hidden", minWidth: 0 }}>
+              <DetailPanel />
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* New Server Modal */}
+      {showNew && (
+        <div onClick={e => e.target === e.currentTarget && setShowNew(false)} style={{ position: "fixed", inset: 0, background: "#000000cc", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999, padding: "16px" }}>
+          <div style={{ background: "#111", border: "1px solid #2a2a2a", borderRadius: "8px", padding: "24px", width: "100%", maxWidth: "360px" }}>
+            <div style={{ fontSize: "14px", fontWeight: "700", color: "#fff", marginBottom: "18px", letterSpacing: "1px" }}>NEW SERVER</div>
+            {[["Server Name", newName, setNewName, "My Discord Bot"], ["Start Command", newCmd, setNewCmd, "node index.js"], ["Node Version", newNode, setNewNode, "20.x LTS"]].map(([label, val, set, ph]) => (
+              <div key={label} style={{ marginBottom: "12px" }}>
+                <div style={{ fontSize: "10px", color: "#555", letterSpacing: "1px", textTransform: "uppercase", marginBottom: "5px" }}>{label}</div>
+                <input style={S.inp} value={val} onChange={e => set(e.target.value)} placeholder={ph} onKeyDown={e => e.key === "Enter" && createServer()} />
               </div>
             ))}
-          </div>
-
-          <div style={css.content}>
-            {/* ── Server panel ── */}
-            {activeServer ? (
-              <div style={css.serverPanel}>
-                {/* Server header */}
-                <div style={css.serverHead}>
-                  <div style={css.statusDot(activeServer.status)} />
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: "15px", fontWeight: "700", color: "#fff" }}>{activeServer.name}</div>
-                    <div style={{ fontSize: "11px", color: "#444", marginTop: "2px" }}>
-                      port {activeServer.port} · uptime {fmtUptime(activeServer.uptime)}
-                    </div>
-                  </div>
-                  <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-                    <button
-                      className="btn-hover"
-                      style={css.btn(activeServer.status === "running" ? "danger" : "primary")}
-                      onClick={() => toggleServer(activeServer.id)}
-                    >
-                      {activeServer.status === "running" ? "⬛ Stop" : "▶ Start"}
-                    </button>
-                    <button
-                      className="btn-hover"
-                      style={css.btn("ghost")}
-                      onClick={() => { setLogs([...FAKE_LOGS]); }}
-                    >
-                      ↺ Restart
-                    </button>
-                    <button
-                      className="btn-hover"
-                      style={{ ...css.btn("danger"), padding: "6px 10px" }}
-                      onClick={() => deleteServer(activeServer.id)}
-                    >
-                      🗑
-                    </button>
-                  </div>
-                </div>
-
-                {/* Tabs */}
-                <div style={css.tabs}>
-                  {["console", "files", "settings"].map((t) => (
-                    <button key={t} style={css.tabBtn(tab === t)} onClick={() => setTab(t)}>
-                      {t === "console" ? "⌨ Console" : t === "files" ? "📁 Files" : "⚙ Settings"}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Tab content */}
-                {tab === "console" && (
-                  <>
-                    <div style={css.console}>
-                      {activeServer.status !== "running" && (
-                        <div style={{ color: "#333", marginBottom: "8px" }}>— Server stopped. Start it to see logs. —</div>
-                      )}
-                      {logs.map((l, i) => (
-                        <p key={i} style={css.logLine(l)}>{l}</p>
-                      ))}
-                      {activeServer.status === "running" && (
-                        <span style={{ color: "#00ff88", animation: "blink 1s infinite" }}>█</span>
-                      )}
-                      <div ref={logsEnd} />
-                    </div>
-                    <div style={css.consoleInput}>
-                      <span style={{ color: "#444" }}>$</span>
-                      <input
-                        style={css.input}
-                        value={consoleInput}
-                        onChange={(e) => setConsoleInput(e.target.value)}
-                        onKeyDown={(e) => e.key === "Enter" && sendCommand(e)}
-                        placeholder={activeServer.status === "running" ? "send command..." : "start server to send commands"}
-                        disabled={activeServer.status !== "running"}
-                      />
-                      <button style={{ ...css.btn(), padding: "4px 10px", fontSize: "11px" }} onClick={sendCommand}>Send</button>
-                    </div>
-                  </>
-                )}
-
-                {tab === "files" && (
-                  <>
-                    <div style={css.uploadZone} className="upload-zone">
-                      <div style={{ fontSize: "20px", marginBottom: "6px" }}>⬆</div>
-                      <div>Drop .zip file to upload</div>
-                      <div style={{ fontSize: "11px", marginTop: "4px" }}>or click to browse</div>
-                    </div>
-                    <div style={css.fileList}>
-                      {activeServer.files.map((f, i) => (
-                        <div key={i} className="file-row" style={css.fileRow}>
-                          <span style={{ color: f.endsWith("/") ? "#7c6aff" : "#00ff88" }}>
-                            {f.endsWith("/") ? "📁" : "📄"}
-                          </span>
-                          <span style={{ flex: 1 }}>{f}</span>
-                          <span style={{ color: "#333", fontSize: "11px" }}>
-                            {f.endsWith("/") ? "dir" : Math.floor(Math.random() * 20 + 1) + " KB"}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </>
-                )}
-
-                {tab === "settings" && (
-                  <div style={css.settingsBlock}>
-                    <div style={{ color: "#555", fontSize: "11px", letterSpacing: "2px", textTransform: "uppercase", marginBottom: "12px" }}>Server Config</div>
-                    {[
-                      ["Name", activeServer.name],
-                      ["Server ID", activeServer.id],
-                      ["Port", activeServer.port],
-                      ["Start Command", "node index.js"],
-                      ["Install Command", "npm install"],
-                      ["Region", "ZA-1 (Render)"],
-                      ["Node Version", "20.x LTS"],
-                    ].map(([k, v]) => (
-                      <div key={k} style={css.settingsRow}>
-                        <span style={css.settingsLabel}>{k}</span>
-                        <span style={css.settingsVal}>{v}</span>
-                      </div>
-                    ))}
-                    <div style={{ marginTop: "20px", display: "flex", gap: "8px" }}>
-                      <button style={css.btn("ghost")}>Edit Config</button>
-                      <button style={css.btn("danger")} onClick={() => deleteServer(activeServer.id)}>Delete Server</button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#333" }}>
-                Select a server →
-              </div>
-            )}
-
-            {/* ── Right metrics panel ── */}
-            {activeServer && (
-              <div style={css.rightPanel}>
-                <div style={css.metricBox}>
-                  <div style={css.metricLabel}>CPU Usage</div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                    <Donut pct={Math.round(activeServer.cpu)} color="#00ff88" />
-                    <div>
-                      <Spark data={cpuHistory[activeServer.id] || Array(12).fill(0)} />
-                      <div style={{ fontSize: "10px", color: "#444", marginTop: "2px" }}>last 24s</div>
-                    </div>
-                  </div>
-                </div>
-                <div style={css.metricBox}>
-                  <div style={css.metricLabel}>Memory</div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                    <Donut pct={Math.round((activeServer.ram / 512) * 100)} color="#7c6aff" />
-                    <div>
-                      <div style={{ fontSize: "18px", fontWeight: "700", color: "#fff" }}>{Math.round(activeServer.ram)}</div>
-                      <div style={{ fontSize: "10px", color: "#444" }}>MB / 512 MB</div>
-                    </div>
-                  </div>
-                </div>
-                <div style={css.metricBox}>
-                  <div style={css.metricLabel}>Uptime</div>
-                  <div style={{ fontSize: "20px", fontWeight: "700", color: "#fff" }}>{fmtUptime(activeServer.uptime)}</div>
-                  <div style={{ fontSize: "11px", color: "#555", marginTop: "2px" }}>
-                    {activeServer.status === "running" ? "● Live" : "● Stopped"}
-                  </div>
-                </div>
-                <div style={css.metricBox}>
-                  <div style={css.metricLabel}>All Servers</div>
-                  <div style={css.serverList}>
-                    {servers.map((s) => (
-                      <div
-                        key={s.id}
-                        className="srv-card"
-                        style={css.serverCard(s.id === active)}
-                        onClick={() => { setActive(s.id); setTab("console"); setLogs([...FAKE_LOGS]); }}
-                      >
-                        <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "4px" }}>
-                          <div style={css.statusDot(s.status)} />
-                          <span style={{ fontSize: "12px", color: s.id === active ? "#fff" : "#888", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.name}</span>
-                        </div>
-                        <div style={{ fontSize: "10px", color: "#444" }}>
-                          {s.status === "running" ? `${Math.round(s.cpu)}% cpu · ${Math.round(s.ram)} MB` : "stopped"}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* ── New Server Modal ── */}
-      {showNew && (
-        <div style={css.modal} onClick={(e) => e.target === e.currentTarget && setShowNew(false)}>
-          <div style={css.modalBox}>
-            <div style={{ fontSize: "14px", fontWeight: "700", color: "#fff", marginBottom: "16px", letterSpacing: "1px" }}>
-              NEW SERVER
-            </div>
-            <div style={{ fontSize: "11px", color: "#555", marginBottom: "6px", letterSpacing: "1px", textTransform: "uppercase" }}>Server Name</div>
-            <input
-              autoFocus
-              style={css.modalInput}
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && createServer()}
-              placeholder="My Discord Bot"
-            />
-            <div style={{ fontSize: "11px", color: "#555", marginBottom: "6px", letterSpacing: "1px", textTransform: "uppercase" }}>Start Command</div>
-            <input style={css.modalInput} defaultValue="node index.js" />
-            <div style={{ fontSize: "11px", color: "#555", marginBottom: "6px", letterSpacing: "1px", textTransform: "uppercase" }}>Node Version</div>
-            <input style={css.modalInput} defaultValue="20.x LTS" />
             <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end", marginTop: "4px" }}>
-              <button style={css.btn()} onClick={() => setShowNew(false)}>Cancel</button>
-              <button style={css.btn("primary")} onClick={createServer}>Create Server</button>
+              <button style={S.btn()} onClick={() => setShowNew(false)}>Cancel</button>
+              <button style={S.btn("primary")} onClick={createServer}>Create</button>
             </div>
           </div>
         </div>
