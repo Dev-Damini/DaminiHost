@@ -1,0 +1,8 @@
+node_modules/
+.env
+data/uploads_tmp/
+
+# Keep the DB and server folders tracked but empty
+# (the .gitkeep files hold them in git)
+data/db/*.json
+data/servers/*/
