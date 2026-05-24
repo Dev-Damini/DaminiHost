@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { auth as authApi, servers as serversApi } from "./api.js";
 
-// ─── Utils ───────────────────────────────────────────────────────────────────
+// ─── Utils ────────────────────────────────────────────────────────────────────
 function fmtUptime(s) {
   if (!s) return "—";
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
@@ -11,7 +11,7 @@ function fmtRam(mb) {
   return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`;
 }
 
-// ─── Sparkline ───────────────────────────────────────────────────────────────
+// ─── Sparkline ────────────────────────────────────────────────────────────────
 function Spark({ data, color = "#00ff88" }) {
   const max = Math.max(...data, 1), w = 56, h = 22;
   if (data.length < 2) return <svg width={w} height={h} />;
@@ -23,7 +23,7 @@ function Spark({ data, color = "#00ff88" }) {
   );
 }
 
-// ─── Donut ───────────────────────────────────────────────────────────────────
+// ─── Donut ────────────────────────────────────────────────────────────────────
 function Donut({ pct, color, size = 40 }) {
   const r = 14, c = size / 2, circ = 2 * Math.PI * r;
   const dash = (Math.min(pct, 100) / 100) * circ;
@@ -38,7 +38,7 @@ function Donut({ pct, color, size = 40 }) {
   );
 }
 
-// ─── Auth Screen ─────────────────────────────────────────────────────────────
+// ─── Auth Screen ──────────────────────────────────────────────────────────────
 function AuthScreen({ onAuth }) {
   const [mode, setMode] = useState("login");
   const [name, setName] = useState("");
@@ -55,11 +55,8 @@ function AuthScreen({ onAuth }) {
         : await authApi.register(name, email, password);
       authApi.save(res.token);
       onAuth(res.user);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
   };
 
   const inp = {
@@ -109,7 +106,7 @@ function AuthScreen({ onAuth }) {
   );
 }
 
-// ─── Main App ────────────────────────────────────────────────────────────────
+// ─── Main App ─────────────────────────────────────────────────────────────────
 export default function DaminiHost() {
   const [user, setUser] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
@@ -124,14 +121,24 @@ export default function DaminiHost() {
   const [newNode, setNewNode] = useState("20.x LTS");
   const [consoleInput, setConsoleInput] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // Files tab state
   const [files, setFiles] = useState([]);
+  const [currentPath, setCurrentPath] = useState("");
   const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState("");
+  const [filesLoading, setFilesLoading] = useState(false);
+
+  // Startup tab state
+  const [startupContent, setStartupContent] = useState("");
+  const [startupFile, setStartupFile] = useState("index.js");
+  const [startupSaving, setStartupSaving] = useState(false);
+  const [startupLoading, setStartupLoading] = useState(false);
+
   const [toastMsg, setToastMsg] = useState("");
   const [loadingServers, setLoadingServers] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
-  const [mobileView, setMobileView] = useState("list"); // list | detail
+  const [mobileView, setMobileView] = useState("list");
 
   const logsEnd = useRef(null);
   const sseRef = useRef(null);
@@ -140,7 +147,7 @@ export default function DaminiHost() {
 
   const activeServer = servers.find(s => s.id === activeId);
 
-  // ── Resize detection ────────────────────────────────────────────────────────
+  // ── Resize ──────────────────────────────────────────────────────────────────
   useEffect(() => {
     const handle = () => setIsMobile(window.innerWidth < 768);
     window.addEventListener("resize", handle);
@@ -157,12 +164,9 @@ export default function DaminiHost() {
   }, []);
 
   // ── Toast ───────────────────────────────────────────────────────────────────
-  const toast = (msg) => {
-    setToastMsg(msg);
-    setTimeout(() => setToastMsg(""), 3000);
-  };
+  const toast = (msg) => { setToastMsg(msg); setTimeout(() => setToastMsg(""), 3000); };
 
-  // ── Load servers ────────────────────────────────────────────────────────────
+  // ── Load servers ─────────────────────────────────────────────────────────────
   const loadServers = useCallback(async () => {
     if (!user) return;
     try {
@@ -176,7 +180,7 @@ export default function DaminiHost() {
     if (user) { setLoadingServers(true); loadServers().finally(() => setLoadingServers(false)); }
   }, [user]);
 
-  // ── Poll server stats every 5s ──────────────────────────────────────────────
+  // ── Poll stats ──────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!user) return;
     pollRef.current = setInterval(async () => {
@@ -185,10 +189,7 @@ export default function DaminiHost() {
         setServers(list);
         list.forEach(s => {
           if (s.status === "running") {
-            setCpuHistory(prev => ({
-              ...prev,
-              [s.id]: [...(prev[s.id] || []).slice(-19), s.cpu || 0]
-            }));
+            setCpuHistory(prev => ({ ...prev, [s.id]: [...(prev[s.id] || []).slice(-19), s.cpu || 0] }));
           }
         });
       } catch (_) {}
@@ -201,10 +202,8 @@ export default function DaminiHost() {
     if (sseRef.current) { sseRef.current.close(); sseRef.current = null; }
     setLogs([]);
     if (!activeId) return;
-
     const es = serversApi.logs(activeId);
     sseRef.current = es;
-
     es.onmessage = (e) => {
       try {
         const data = JSON.parse(e.data);
@@ -214,31 +213,64 @@ export default function DaminiHost() {
       } catch (_) {}
     };
     es.onerror = () => {};
-
     return () => { es.close(); };
   }, [activeId]);
 
-  // ── Scroll logs ─────────────────────────────────────────────────────────────
+  // ── Auto-scroll logs ─────────────────────────────────────────────────────────
   useEffect(() => {
     logsEnd.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs]);
 
-  // ── Load files when Files tab opens ────────────────────────────────────────
+  // ── Load files ──────────────────────────────────────────────────────────────
+  const loadFiles = useCallback(async (serverId, subpath = "") => {
+    setFilesLoading(true);
+    try {
+      const BASE = import.meta.env.VITE_API_URL || "";
+      const token = authApi.token();
+      const res = await fetch(`${BASE}/api/servers/${serverId}/files?path=${encodeURIComponent(subpath)}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      setFiles(data.files || []);
+      setCurrentPath(data.currentPath || "");
+    } catch (_) { setFiles([]); }
+    finally { setFilesLoading(false); }
+  }, []);
+
   useEffect(() => {
-    if (tab === "files" && activeId) {
-      serversApi.files(activeId).then(setFiles).catch(() => setFiles([]));
-    }
+    if (tab === "files" && activeId) loadFiles(activeId, "");
   }, [tab, activeId]);
 
-  // ── Select server ───────────────────────────────────────────────────────────
+  // ── Load startup file ────────────────────────────────────────────────────────
+  const loadStartupFile = useCallback(async (serverId, filename) => {
+    setStartupLoading(true);
+    try {
+      const BASE = import.meta.env.VITE_API_URL || "";
+      const token = authApi.token();
+      const res = await fetch(`${BASE}/api/servers/${serverId}/startup?file=${encodeURIComponent(filename)}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      setStartupContent(data.content || "");
+    } catch (_) {}
+    finally { setStartupLoading(false); }
+  }, []);
+
+  useEffect(() => {
+    if (tab === "startup" && activeId) loadStartupFile(activeId, startupFile);
+  }, [tab, activeId]);
+
+  // ── Select server ────────────────────────────────────────────────────────────
   const selectServer = (id) => {
     setActiveId(id);
     setTab("console");
     setLogs([]);
+    setFiles([]);
+    setCurrentPath("");
     if (isMobile) { setSidebarOpen(false); setMobileView("detail"); }
   };
 
-  // ── Create server ───────────────────────────────────────────────────────────
+  // ── Create server ────────────────────────────────────────────────────────────
   const createServer = async () => {
     if (!newName.trim()) return;
     try {
@@ -249,7 +281,7 @@ export default function DaminiHost() {
       setNewName(""); setNewCmd("node index.js"); setNewNode("20.x LTS");
       setTab("files");
       if (isMobile) setMobileView("detail");
-      toast("Server created — upload your files next");
+      toast("Server created — upload your files");
     } catch (e) { toast("Error: " + e.message); }
   };
 
@@ -274,6 +306,7 @@ export default function DaminiHost() {
     setActionLoading(true);
     try {
       await serversApi.start(activeId);
+      setTab("console");
       toast("Starting...");
       setTimeout(loadServers, 2000);
     } catch (e) { toast("Error: " + e.message); }
@@ -297,41 +330,89 @@ export default function DaminiHost() {
     if (!file || !activeId) return;
     if (!file.name.endsWith(".zip")) { toast("Only .zip files allowed"); return; }
     setUploading(true);
-    setUploadProgress("Uploading...");
+    toast("Uploading...");
     try {
       const res = await serversApi.upload(activeId, file);
+      // res.files comes directly from the backend after extraction
       setFiles(res.files || []);
-      toast("Upload complete ✓");
-      setUploadProgress("");
+      setCurrentPath("");
+      setTab("files");
+      toast(`✓ Uploaded & extracted ${res.files?.length || 0} items`);
     } catch (e) {
       toast("Upload failed: " + e.message);
-      setUploadProgress("");
     } finally {
       setUploading(false);
       e.target.value = "";
     }
   };
 
-  const handleDeleteFile = async (filename) => {
-    if (!confirm(`Delete ${filename}?`)) return;
+  // ── Delete file ───────────────────────────────────────────────────────────────
+  const handleDeleteFile = async (filePath) => {
+    if (!confirm(`Delete ${filePath}?`)) return;
     try {
-      await serversApi.deleteFile(activeId, filename);
-      setFiles(prev => prev.filter(f => f.name !== filename));
-      toast("File deleted");
+      const BASE = import.meta.env.VITE_API_URL || "";
+      await fetch(`${BASE}/api/servers/${activeId}/files`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${authApi.token()}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ path: filePath }),
+      });
+      await loadFiles(activeId, currentPath);
+      toast("Deleted");
     } catch (e) { toast("Error: " + e.message); }
+  };
+
+  // ── Move file up ──────────────────────────────────────────────────────────────
+  const handleMoveUp = async (filePath) => {
+    const parts = filePath.split("/");
+    if (parts.length < 2) { toast("Already at root"); return; }
+    const filename = parts[parts.length - 1];
+    const newPath = filename; // move to root
+    try {
+      const BASE = import.meta.env.VITE_API_URL || "";
+      await fetch(`${BASE}/api/servers/${activeId}/files/move`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${authApi.token()}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ from: filePath, to: newPath }),
+      });
+      await loadFiles(activeId, "");
+      toast(`Moved ${filename} to root`);
+    } catch (e) { toast("Error: " + e.message); }
+  };
+
+  // ── Save startup file ─────────────────────────────────────────────────────────
+  const saveStartup = async () => {
+    if (!activeId) return;
+    setStartupSaving(true);
+    try {
+      const BASE = import.meta.env.VITE_API_URL || "";
+      await fetch(`${BASE}/api/servers/${activeId}/startup`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${authApi.token()}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ content: startupContent, filename: startupFile }),
+      });
+      toast(`✓ Saved ${startupFile}`);
+      // Also update startCmd if needed
+      await serversApi.update(activeId, { startCmd: `node ${startupFile}` });
+      setServers(prev => prev.map(s => s.id === activeId ? { ...s, startCmd: `node ${startupFile}` } : s));
+    } catch (e) { toast("Error: " + e.message); }
+    finally { setStartupSaving(false); }
   };
 
   // ── Logout ───────────────────────────────────────────────────────────────────
   const logout = () => { authApi.clear(); setUser(null); setServers([]); setActiveId(null); };
 
-  // ── Render guards ────────────────────────────────────────────────────────────
-  if (!authChecked) return <div style={{ background: "#080808", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: "#333", fontFamily: "monospace" }}>loading...</div>;
+  // ── Guards ───────────────────────────────────────────────────────────────────
+  if (!authChecked) return (
+    <div style={{ background: "#080808", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: "#333", fontFamily: "monospace" }}>
+      loading...
+    </div>
+  );
   if (!user) return <AuthScreen onAuth={u => setUser(u)} />;
 
   const totalRunning = servers.filter(s => s.status === "running").length;
   const totalRam = servers.reduce((a, s) => a + (s.ram || 0), 0);
 
-  // ── Styles ───────────────────────────────────────────────────────────────────
+  // ── Style helpers ─────────────────────────────────────────────────────────────
   const S = {
     btn: (v = "ghost") => ({
       padding: "7px 14px", borderRadius: "4px", fontSize: "12px", fontWeight: "600",
@@ -351,8 +432,8 @@ export default function DaminiHost() {
       padding: "8px 12px", color: "#fff", fontFamily: "inherit", fontSize: "13px",
       outline: "none", width: "100%", boxSizing: "border-box",
     },
-    tab: (a) => ({
-      padding: isMobile ? "10px 14px" : "9px 16px", fontSize: "12px", fontFamily: "inherit",
+    tabBtn: (a) => ({
+      padding: isMobile ? "10px 12px" : "9px 16px", fontSize: "12px", fontFamily: "inherit",
       cursor: "pointer", background: "transparent", border: "none",
       borderBottom: a ? "2px solid #00ff88" : "2px solid transparent",
       color: a ? "#00ff88" : "#555", fontWeight: a ? "600" : "400",
@@ -367,7 +448,7 @@ export default function DaminiHost() {
     }),
   };
 
-  // ── Sidebar content ──────────────────────────────────────────────────────────
+  // ── Sidebar ───────────────────────────────────────────────────────────────────
   const SidebarContent = () => (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflowY: "auto" }}>
       <div style={{ padding: "10px 14px 4px", fontSize: "10px", color: "#3a3a3a", letterSpacing: "2px", textTransform: "uppercase" }}>Servers</div>
@@ -377,7 +458,7 @@ export default function DaminiHost() {
           display: "flex", alignItems: "center", gap: "8px", padding: "10px 14px",
           cursor: "pointer", background: activeId === s.id ? "#141414" : "transparent",
           borderLeft: activeId === s.id ? "2px solid #00ff88" : "2px solid transparent",
-          color: activeId === s.id ? "#fff" : "#666", transition: "all 0.15s",
+          color: activeId === s.id ? "#fff" : "#666",
         }}>
           <div style={S.dot(s.status)} />
           <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: "13px" }}>{s.name}</span>
@@ -399,7 +480,7 @@ export default function DaminiHost() {
     </div>
   );
 
-  // ── Server detail panel ──────────────────────────────────────────────────────
+  // ── Detail Panel ──────────────────────────────────────────────────────────────
   const DetailPanel = () => {
     if (!activeServer) return (
       <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#2a2a2a", gap: "12px" }}>
@@ -413,15 +494,16 @@ export default function DaminiHost() {
 
     return (
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
-        {/* Server header */}
-        <div style={{ padding: isMobile ? "10px 14px" : "12px 20px", borderBottom: "1px solid #1a1a1a", background: "#0c0c0c", display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", gap: "8px" }}>
+
+        {/* Header */}
+        <div style={{ padding: isMobile ? "10px 14px" : "12px 20px", borderBottom: "1px solid #1a1a1a", background: "#0c0c0c", display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
           {isMobile && (
-            <button onClick={() => setMobileView("list")} style={{ ...S.btn(), padding: "5px 8px", fontSize: "14px", marginRight: "2px" }}>←</button>
+            <button onClick={() => setMobileView("list")} style={{ ...S.btn(), padding: "5px 8px", fontSize: "15px" }}>←</button>
           )}
           <div style={S.dot(activeServer.status)} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: "14px", fontWeight: "700", color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{activeServer.name}</div>
-            <div style={{ fontSize: "10px", color: "#444", marginTop: "1px" }}>uptime {fmtUptime(activeServer.uptime)}</div>
+            <div style={{ fontSize: "10px", color: "#444", marginTop: "1px" }}>{activeServer.startCmd} · uptime {fmtUptime(activeServer.uptime)}</div>
           </div>
           <div style={{ display: "flex", gap: "6px", flexShrink: 0 }}>
             <button disabled={actionLoading} onClick={isRunning ? stopServer : startServer}
@@ -436,12 +518,12 @@ export default function DaminiHost() {
 
         {/* Tabs */}
         <div style={{ display: "flex", borderBottom: "1px solid #1a1a1a", background: "#0a0a0a", overflowX: "auto" }}>
-          {[["console", "⌨ Console"], ["files", "📁 Files"], ["metrics", "📊 Metrics"], ["settings", "⚙ Settings"]].map(([t, label]) => (
-            <button key={t} style={S.tab(tab === t)} onClick={() => setTab(t)}>{label}</button>
+          {[["console","⌨ Console"],["files","📁 Files"],["startup","✏ Startup"],["metrics","📊 Metrics"],["settings","⚙ Settings"]].map(([t, label]) => (
+            <button key={t} style={S.tabBtn(tab === t)} onClick={() => setTab(t)}>{label}</button>
           ))}
         </div>
 
-        {/* Console tab */}
+        {/* ── Console ── */}
         {tab === "console" && (
           <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
             <div style={{ flex: 1, overflowY: "auto", padding: "12px 14px", background: "#060606", fontFamily: "'DM Mono',monospace", fontSize: isMobile ? "11px" : "12px" }}>
@@ -456,8 +538,10 @@ export default function DaminiHost() {
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 12px", borderTop: "1px solid #1a1a1a", background: "#0a0a0a" }}>
               <span style={{ color: "#333" }}>$</span>
-              <input style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: "#00ff88", fontFamily: "inherit", fontSize: "12px" }}
-                value={consoleInput} onChange={e => setConsoleInput(e.target.value)}
+              <input
+                style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: "#00ff88", fontFamily: "inherit", fontSize: "12px" }}
+                value={consoleInput}
+                onChange={e => setConsoleInput(e.target.value)}
                 onKeyDown={e => {
                   if (e.key === "Enter" && consoleInput.trim()) {
                     setLogs(p => [...p, `$ ${consoleInput}`]);
@@ -465,52 +549,151 @@ export default function DaminiHost() {
                   }
                 }}
                 placeholder={isRunning ? "type command..." : "start server first"}
-                disabled={!isRunning} />
+                disabled={!isRunning}
+              />
             </div>
           </div>
         )}
 
-        {/* Files tab */}
+        {/* ── Files ── */}
         {tab === "files" && (
           <div style={{ flex: 1, overflowY: "auto" }}>
-            {/* Upload button — works on phone AND PC, click only, no drag */}
+            {/* Upload button */}
             <div style={{ padding: "14px 14px 0" }}>
               <input ref={fileInputRef} type="file" accept=".zip" style={{ display: "none" }} onChange={handleFileSelect} />
               <button
                 onClick={() => fileInputRef.current?.click()}
                 disabled={uploading}
-                style={{
-                  ...S.btn("primary"), width: "100%", padding: "12px",
-                  fontSize: "13px", opacity: uploading ? 0.6 : 1,
-                  display: "flex", alignItems: "center", justifyContent: "center", gap: "8px",
-                }}>
-                {uploading ? `⟳ ${uploadProgress}` : "⬆ Upload .zip file"}
+                style={{ ...S.btn("primary"), width: "100%", padding: "12px", fontSize: "13px", opacity: uploading ? 0.6 : 1, display: "flex", alignItems: "center", justifyContent: "center", gap: "8px" }}>
+                {uploading ? "⟳ Uploading..." : "⬆ Upload .zip"}
               </button>
-              <div style={{ fontSize: "11px", color: "#3a3a3a", textAlign: "center", marginTop: "6px" }}>
-                Tap to select from your device
-              </div>
+              <div style={{ fontSize: "11px", color: "#3a3a3a", textAlign: "center", marginTop: "5px" }}>Tap to select from your device</div>
             </div>
-            <div style={{ padding: "12px 14px" }}>
-              {files.length === 0 && (
-                <div style={{ color: "#2a2a2a", fontSize: "12px", textAlign: "center", padding: "20px 0" }}>
-                  No files uploaded yet
+
+            {/* Breadcrumb */}
+            <div style={{ padding: "10px 14px 4px", display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "#444" }}>
+              <span
+                style={{ cursor: "pointer", color: currentPath ? "#7c6aff" : "#555" }}
+                onClick={() => loadFiles(activeId, "")}>
+                root
+              </span>
+              {currentPath && <>
+                <span>/</span>
+                <span style={{ color: "#ccc" }}>{currentPath}</span>
+              </>}
+              {currentPath && (
+                <button
+                  onClick={() => {
+                    const parts = currentPath.split("/");
+                    parts.pop();
+                    loadFiles(activeId, parts.join("/"));
+                  }}
+                  style={{ ...S.btn(), padding: "2px 8px", fontSize: "11px", marginLeft: "auto" }}>
+                  ← Back
+                </button>
+              )}
+            </div>
+
+            {/* File list */}
+            <div style={{ padding: "4px 14px 14px" }}>
+              {filesLoading && <div style={{ color: "#333", fontSize: "12px", padding: "12px 0" }}>loading...</div>}
+              {!filesLoading && files.length === 0 && (
+                <div style={{ color: "#2a2a2a", fontSize: "12px", textAlign: "center", padding: "24px 0" }}>
+                  No files yet — upload a .zip above
                 </div>
               )}
               {files.map((f, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: "10px", padding: "9px 12px", borderRadius: "4px", marginBottom: "4px", background: "#0f0f0f", border: "1px solid #1a1a1a" }}>
-                  <span style={{ color: f.isDir ? "#7c6aff" : "#00ff88", fontSize: "14px" }}>{f.isDir ? "📁" : "📄"}</span>
-                  <span style={{ flex: 1, fontSize: "12px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</span>
-                  <span style={{ color: "#333", fontSize: "11px", flexShrink: 0 }}>{f.isDir ? "dir" : `${Math.round((f.size || 0) / 1024)}KB`}</span>
-                  {!f.isDir && (
-                    <button onClick={() => handleDeleteFile(f.name)} style={{ ...S.btn("danger"), padding: "2px 6px", fontSize: "11px", flexShrink: 0 }}>✕</button>
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "9px 12px", borderRadius: "4px", marginBottom: "4px", background: "#0f0f0f", border: "1px solid #1a1a1a" }}>
+                  <span
+                    style={{ color: f.isDir ? "#7c6aff" : "#00ff88", fontSize: "14px", cursor: f.isDir ? "pointer" : "default" }}
+                    onClick={() => f.isDir && loadFiles(activeId, f.path || f.name)}>
+                    {f.isDir ? "📁" : "📄"}
+                  </span>
+                  <span
+                    style={{ flex: 1, fontSize: "12px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: f.isDir ? "pointer" : "default", color: f.isDir ? "#aaa" : "#ccc" }}
+                    onClick={() => f.isDir && loadFiles(activeId, f.path || f.name)}>
+                    {f.name}
+                  </span>
+                  <span style={{ color: "#333", fontSize: "11px", flexShrink: 0 }}>
+                    {f.isDir ? "dir" : `${Math.round((f.size || 0) / 1024) || "<1"}KB`}
+                  </span>
+                  {/* Move up button — useful when files are nested in a subfolder */}
+                  {currentPath && !f.isDir && (
+                    <button
+                      onClick={() => handleMoveUp(f.path || `${currentPath}/${f.name}`)}
+                      title="Move to root"
+                      style={{ ...S.btn(), padding: "2px 6px", fontSize: "10px", flexShrink: 0 }}>
+                      ↑ root
+                    </button>
                   )}
+                  <button
+                    onClick={() => handleDeleteFile(f.path || f.name)}
+                    style={{ ...S.btn("danger"), padding: "2px 6px", fontSize: "11px", flexShrink: 0 }}>
+                    ✕
+                  </button>
                 </div>
               ))}
             </div>
           </div>
         )}
 
-        {/* Metrics tab */}
+        {/* ── Startup ── */}
+        {tab === "startup" && (
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            {/* Filename bar */}
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "10px 14px", borderBottom: "1px solid #1a1a1a", background: "#0c0c0c" }}>
+              <span style={{ fontSize: "11px", color: "#555", flexShrink: 0 }}>File:</span>
+              <input
+                style={{ ...S.inp, flex: 1, padding: "5px 10px", fontSize: "12px" }}
+                value={startupFile}
+                onChange={e => setStartupFile(e.target.value)}
+                placeholder="index.js"
+              />
+              <button
+                style={{ ...S.btn(), padding: "5px 10px", fontSize: "11px", flexShrink: 0 }}
+                onClick={() => loadStartupFile(activeId, startupFile)}>
+                Load
+              </button>
+              <button
+                disabled={startupSaving}
+                style={{ ...S.btn("primary"), padding: "5px 12px", fontSize: "11px", opacity: startupSaving ? 0.6 : 1, flexShrink: 0 }}
+                onClick={saveStartup}>
+                {startupSaving ? "Saving..." : "Save"}
+              </button>
+            </div>
+            <div style={{ padding: "6px 14px", fontSize: "10px", color: "#444", borderBottom: "1px solid #111", background: "#0a0a0a" }}>
+              Saving will also set start command to: <span style={{ color: "#7c6aff" }}>node {startupFile}</span>
+            </div>
+            {/* Code editor */}
+            {startupLoading ? (
+              <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#333", fontSize: "12px" }}>loading...</div>
+            ) : (
+              <textarea
+                spellCheck={false}
+                style={{
+                  flex: 1, background: "#060606", color: "#ccc", fontFamily: "'DM Mono','Fira Mono',monospace",
+                  fontSize: isMobile ? "12px" : "13px", lineHeight: "1.7", border: "none", outline: "none",
+                  resize: "none", padding: "14px 16px", width: "100%", boxSizing: "border-box",
+                  tabSize: 2,
+                }}
+                value={startupContent}
+                onChange={e => setStartupContent(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === "Tab") {
+                    e.preventDefault();
+                    const s = e.target.selectionStart, en = e.target.selectionEnd;
+                    const val = startupContent;
+                    setStartupContent(val.substring(0, s) + "  " + val.substring(en));
+                    setTimeout(() => { e.target.selectionStart = e.target.selectionEnd = s + 2; }, 0);
+                  }
+                }}
+                placeholder={`// Write your startup file here\n// e.g. index.js\n\nconsole.log("Bot starting...");\n`}
+              />
+            )}
+          </div>
+        )}
+
+        {/* ── Metrics ── */}
         {tab === "metrics" && (
           <div style={{ flex: 1, overflowY: "auto", padding: "14px" }}>
             <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "1fr 1fr 1fr", gap: "10px", marginBottom: "16px" }}>
@@ -529,7 +712,7 @@ export default function DaminiHost() {
               <div style={{ fontSize: "10px", color: "#444", letterSpacing: "2px", textTransform: "uppercase", marginBottom: "10px" }}>CPU History</div>
               <div style={{ display: "flex", alignItems: "flex-end", gap: "2px", height: "60px" }}>
                 {(cpuHistory[activeId] || Array(20).fill(0)).map((v, i) => (
-                  <div key={i} style={{ flex: 1, background: "#00ff88", opacity: 0.7, borderRadius: "2px 2px 0 0", height: `${Math.max(2, (v / 100) * 60)}px`, transition: "height 0.3s" }} />
+                  <div key={i} style={{ flex: 1, background: "#00ff88", opacity: 0.65, borderRadius: "2px 2px 0 0", height: `${Math.max(2, (v / 100) * 60)}px`, transition: "height 0.3s" }} />
                 ))}
               </div>
               <div style={{ fontSize: "10px", color: "#2a2a2a", marginTop: "6px" }}>last 100s</div>
@@ -537,7 +720,7 @@ export default function DaminiHost() {
           </div>
         )}
 
-        {/* Settings tab */}
+        {/* ── Settings ── */}
         {tab === "settings" && (
           <div style={{ flex: 1, overflowY: "auto", padding: "14px" }}>
             {[
@@ -561,7 +744,7 @@ export default function DaminiHost() {
     );
   };
 
-  // ── Root render ──────────────────────────────────────────────────────────────
+  // ── Root ──────────────────────────────────────────────────────────────────────
   return (
     <div style={{ fontFamily: "'DM Mono','Fira Mono',monospace", background: "#080808", color: "#e0e0e0", height: "100dvh", display: "flex", flexDirection: "column", fontSize: "13px", overflow: "hidden" }}>
       <style>{`
@@ -572,7 +755,7 @@ export default function DaminiHost() {
         ::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 2px; }
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
         @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
-        button:hover { opacity: 0.85; }
+        button:hover { opacity: 0.82; }
       `}</style>
 
       {/* Toast */}
@@ -585,14 +768,10 @@ export default function DaminiHost() {
       {/* Topbar */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 14px", height: "48px", borderBottom: "1px solid #1a1a1a", background: "#0c0c0c", flexShrink: 0, zIndex: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-          {isMobile && mobileView === "detail" ? (
-            <button onClick={() => setMobileView("list")} style={{ ...S.btn(), padding: "5px 8px", fontSize: "15px" }}>←</button>
-          ) : (
-            <button onClick={() => setSidebarOpen(o => !o)} style={{ ...S.btn(), padding: "5px 8px", fontSize: "15px" }}>☰</button>
-          )}
+          <button onClick={() => setSidebarOpen(o => !o)} style={{ ...S.btn(), padding: "5px 8px", fontSize: "15px" }}>☰</button>
           <div style={{ display: "flex", alignItems: "center", gap: "7px" }}>
             <div style={{ width: "7px", height: "7px", borderRadius: "50%", background: "#00ff88", boxShadow: "0 0 8px #00ff88", animation: "pulse 2s infinite" }} />
-            <span style={{ fontSize: "14px", fontWeight: "700", letterSpacing: "3px", color: "#fff" }}>DAMINIHOST</span>
+            <span style={{ fontSize: isMobile ? "13px" : "14px", fontWeight: "700", letterSpacing: "3px", color: "#fff" }}>DAMINIHOST</span>
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
@@ -610,62 +789,58 @@ export default function DaminiHost() {
 
       {/* Body */}
       <div style={{ flex: 1, display: "flex", overflow: "hidden", position: "relative" }}>
+        {/* Sidebar overlay on mobile */}
+        {isMobile && sidebarOpen && (
+          <div onClick={() => setSidebarOpen(false)} style={{ position: "absolute", inset: 0, background: "#000000aa", zIndex: 50 }} />
+        )}
 
-        {/* Sidebar — desktop: permanent column; mobile: overlay drawer */}
+        {/* Sidebar */}
+        <div style={{
+          ...(isMobile ? {
+            position: "absolute", top: 0, left: 0, bottom: 0, width: "240px", zIndex: 51,
+            transform: sidebarOpen ? "translateX(0)" : "translateX(-100%)", transition: "transform 0.2s ease",
+          } : {
+            width: sidebarOpen ? "0" : "220px", minWidth: sidebarOpen ? "0" : "220px", transition: "all 0.2s",
+          }),
+          background: "#0a0a0a", borderRight: "1px solid #1a1a1a", overflow: "hidden",
+        }}>
+          <SidebarContent />
+        </div>
+
+        {/* Main area */}
         {isMobile ? (
-          <>
-            {sidebarOpen && (
-              <div onClick={() => setSidebarOpen(false)} style={{ position: "absolute", inset: 0, background: "#000000aa", zIndex: 50 }} />
-            )}
-            <div style={{
-              position: "absolute", top: 0, left: 0, bottom: 0, width: "240px",
-              background: "#0a0a0a", borderRight: "1px solid #1a1a1a",
-              zIndex: 51, transform: sidebarOpen ? "translateX(0)" : "translateX(-100%)",
-              transition: "transform 0.2s ease",
-            }}>
-              <SidebarContent />
-            </div>
-            {/* Mobile: show server list OR detail */}
-            <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-              {mobileView === "list" ? (
-                <div style={{ flex: 1, overflowY: "auto" }}>
-                  <div style={{ padding: "10px 14px 4px", fontSize: "10px", color: "#3a3a3a", letterSpacing: "2px", textTransform: "uppercase" }}>Your Servers</div>
-                  {servers.map(s => (
-                    <div key={s.id} onClick={() => selectServer(s.id)} style={{ display: "flex", alignItems: "center", gap: "12px", padding: "14px 16px", borderBottom: "1px solid #111", cursor: "pointer" }}>
-                      <div style={S.dot(s.status)} />
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: "14px", color: "#ddd" }}>{s.name}</div>
-                        <div style={{ fontSize: "11px", color: "#444", marginTop: "2px" }}>{s.status} · {fmtUptime(s.uptime)}</div>
-                      </div>
-                      <span style={{ color: "#333", fontSize: "18px" }}>›</span>
+          <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+            {mobileView === "list" ? (
+              <div style={{ flex: 1, overflowY: "auto" }}>
+                <div style={{ padding: "10px 14px 4px", fontSize: "10px", color: "#3a3a3a", letterSpacing: "2px", textTransform: "uppercase" }}>Your Servers</div>
+                {servers.map(s => (
+                  <div key={s.id} onClick={() => selectServer(s.id)} style={{ display: "flex", alignItems: "center", gap: "12px", padding: "14px 16px", borderBottom: "1px solid #111", cursor: "pointer" }}>
+                    <div style={S.dot(s.status)} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: "14px", color: "#ddd" }}>{s.name}</div>
+                      <div style={{ fontSize: "11px", color: "#444", marginTop: "2px" }}>{s.status} · {fmtUptime(s.uptime)}</div>
                     </div>
-                  ))}
-                  {servers.length === 0 && !loadingServers && (
-                    <div style={{ padding: "40px 16px", textAlign: "center", color: "#333" }}>
-                      <div style={{ fontSize: "12px", marginBottom: "12px" }}>No servers yet</div>
-                      <button style={S.btn("primary")} onClick={() => setShowNew(true)}>+ New Server</button>
-                    </div>
-                  )}
-                  <div style={{ padding: "12px 14px" }}>
-                    <button style={{ ...S.btn("primary"), width: "100%", padding: "10px" }} onClick={() => setShowNew(true)}>+ New Server</button>
+                    <span style={{ color: "#333", fontSize: "18px" }}>›</span>
                   </div>
+                ))}
+                {servers.length === 0 && !loadingServers && (
+                  <div style={{ padding: "40px 16px", textAlign: "center", color: "#333" }}>
+                    <div style={{ fontSize: "12px", marginBottom: "12px" }}>No servers yet</div>
+                    <button style={S.btn("primary")} onClick={() => setShowNew(true)}>+ New Server</button>
+                  </div>
+                )}
+                <div style={{ padding: "12px 14px" }}>
+                  <button style={{ ...S.btn("primary"), width: "100%", padding: "10px" }} onClick={() => setShowNew(true)}>+ New Server</button>
                 </div>
-              ) : (
-                <DetailPanel />
-              )}
-            </div>
-          </>
-        ) : (
-          <>
-            {/* Desktop sidebar */}
-            <div style={{ width: sidebarOpen ? "0" : "220px", minWidth: sidebarOpen ? "0" : "220px", borderRight: "1px solid #1a1a1a", background: "#0a0a0a", transition: "all 0.2s", overflow: "hidden" }}>
-              <SidebarContent />
-            </div>
-            {/* Desktop main content */}
-            <div style={{ flex: 1, display: "flex", overflow: "hidden", minWidth: 0 }}>
+              </div>
+            ) : (
               <DetailPanel />
-            </div>
-          </>
+            )}
+          </div>
+        ) : (
+          <div style={{ flex: 1, display: "flex", overflow: "hidden", minWidth: 0 }}>
+            <DetailPanel />
+          </div>
         )}
       </div>
 
@@ -674,7 +849,11 @@ export default function DaminiHost() {
         <div onClick={e => e.target === e.currentTarget && setShowNew(false)} style={{ position: "fixed", inset: 0, background: "#000000cc", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999, padding: "16px" }}>
           <div style={{ background: "#111", border: "1px solid #2a2a2a", borderRadius: "8px", padding: "24px", width: "100%", maxWidth: "360px" }}>
             <div style={{ fontSize: "14px", fontWeight: "700", color: "#fff", marginBottom: "18px", letterSpacing: "1px" }}>NEW SERVER</div>
-            {[["Server Name", newName, setNewName, "My Discord Bot"], ["Start Command", newCmd, setNewCmd, "node index.js"], ["Node Version", newNode, setNewNode, "20.x LTS"]].map(([label, val, set, ph]) => (
+            {[
+              ["Server Name", newName, setNewName, "My Discord Bot"],
+              ["Start Command", newCmd, setNewCmd, "node index.js"],
+              ["Node Version", newNode, setNewNode, "20.x LTS"],
+            ].map(([label, val, set, ph]) => (
               <div key={label} style={{ marginBottom: "12px" }}>
                 <div style={{ fontSize: "10px", color: "#555", letterSpacing: "1px", textTransform: "uppercase", marginBottom: "5px" }}>{label}</div>
                 <input style={S.inp} value={val} onChange={e => set(e.target.value)} placeholder={ph} onKeyDown={e => e.key === "Enter" && createServer()} />
