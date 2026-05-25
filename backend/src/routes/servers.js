@@ -187,7 +187,7 @@ router.get("/:id/logs", (req, res) => {
   req.on("close", () => { clearInterval(hb); pm.removeSSEClient(server.id, res); });
 });
 
-// ─── POST /api/servers/:id/upload ─────────────────────────────────────────────
+// ─── POST /api/servers/:id/upload — save zip into server folder as-is ─────────
 router.post("/:id/upload", upload.single("file"), async (req, res) => {
   const server = ownedBy(req.params.id, req.user.id);
   if (!server) return res.status(404).json({ error: "Server not found" });
@@ -197,21 +197,39 @@ router.post("/:id/upload", upload.single("file"), async (req, res) => {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
   try {
-    await fs
-      .createReadStream(req.file.path)
-      .pipe(unzipper.Extract({ path: dir }))
-      .promise();
-
-    fs.unlinkSync(req.file.path);
-
-    // Auto-flatten if zip had a single root folder (e.g. mybot-main/)
-    flattenSingleRootFolder(dir);
+    const destName = req.file.originalname || "upload.zip";
+    const destPath = path.join(dir, destName);
+    fs.renameSync(req.file.path, destPath);
 
     const files = dirFiles(dir);
     res.json({ ok: true, files });
   } catch (err) {
     try { fs.unlinkSync(req.file.path); } catch (_) {}
-    res.status(500).json({ error: "Failed to extract zip: " + err.message });
+    res.status(500).json({ error: "Upload failed: " + err.message });
+  }
+});
+
+// ─── POST /api/servers/:id/extract — extract a zip already in the folder ──────
+router.post("/:id/extract", async (req, res) => {
+  const server = ownedBy(req.params.id, req.user.id);
+  if (!server) return res.status(404).json({ error: "Server not found" });
+
+  const { filename } = req.body;
+  if (!filename) return res.status(400).json({ error: "filename is required" });
+
+  const dir = serverDir(server.id);
+  const zipPath = path.resolve(dir, path.basename(filename));
+
+  if (!zipPath.startsWith(dir)) return res.status(400).json({ error: "Invalid path" });
+  if (!fs.existsSync(zipPath)) return res.status(404).json({ error: "File not found" });
+
+  try {
+    await fs.createReadStream(zipPath).pipe(unzipper.Extract({ path: dir })).promise();
+    flattenSingleRootFolder(dir);
+    const files = dirFiles(dir);
+    res.json({ ok: true, files });
+  } catch (err) {
+    res.status(500).json({ error: "Extraction failed: " + err.message });
   }
 });
 
