@@ -106,6 +106,99 @@ function AuthScreen({ onAuth }) {
   );
 }
 
+// ─── Settings Tab ─────────────────────────────────────────────────────────────
+function SettingsTab({ server, onDelete, onSave, S, isMobile }) {
+  const [name, setName] = useState(server.name);
+  const [startCmd, setStartCmd] = useState(server.startCmd || "node index.js");
+  const [nodeVersion, setNodeVersion] = useState(server.nodeVersion || "20.x");
+  const [saving, setSaving] = useState(false);
+
+  const PRESETS = ["node index.js", "node main.js", "node src/index.js", "node bot.js", "npm start", "npm run start"];
+
+  const save = async () => {
+    setSaving(true);
+    await onSave({ name, startCmd, nodeVersion });
+    setSaving(false);
+  };
+
+  const rowStyle = { padding: "12px 0", borderBottom: "1px solid #141414" };
+  const labelStyle = { fontSize: "11px", color: "#555", letterSpacing: "1px", textTransform: "uppercase", marginBottom: "6px" };
+
+  return (
+    <div style={{ flex: 1, overflowY: "auto", padding: "14px" }}>
+      {/* Name */}
+      <div style={rowStyle}>
+        <div style={labelStyle}>Server Name</div>
+        <input style={S.inp} value={name} onChange={e => setName(e.target.value)} />
+      </div>
+
+      {/* Start Command */}
+      <div style={rowStyle}>
+        <div style={labelStyle}>Start Command</div>
+        <input
+          style={{ ...S.inp, marginBottom: "8px", fontFamily: "'DM Mono','Fira Mono',monospace", color: "#00ff88" }}
+          value={startCmd}
+          onChange={e => setStartCmd(e.target.value)}
+          placeholder="node index.js"
+        />
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+          {PRESETS.map(p => (
+            <button
+              key={p}
+              onClick={() => setStartCmd(p)}
+              style={{
+                ...S.btn(startCmd === p ? "primary" : "ghost"),
+                padding: "4px 10px", fontSize: "11px",
+                fontFamily: "'DM Mono','Fira Mono',monospace",
+              }}>
+              {p}
+            </button>
+          ))}
+        </div>
+        <div style={{ fontSize: "10px", color: "#3a3a3a", marginTop: "8px" }}>
+          Tap a preset or type your own. Runs inside your server folder.
+        </div>
+      </div>
+
+      {/* Node Version */}
+      <div style={rowStyle}>
+        <div style={labelStyle}>Node Version</div>
+        <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+          {["18.x", "20.x LTS", "21.x"].map(v => (
+            <button
+              key={v}
+              onClick={() => setNodeVersion(v)}
+              style={{ ...S.btn(nodeVersion === v ? "primary" : "ghost"), padding: "4px 12px", fontSize: "11px" }}>
+              {v}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Read-only info */}
+      {[["Server ID", server.id], ["Status", server.status]].map(([k, v]) => (
+        <div key={k} style={{ ...rowStyle, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={{ color: "#444", fontSize: "12px" }}>{k}</span>
+          <span style={{ color: "#555", fontSize: "12px", wordBreak: "break-all", textAlign: "right" }}>{v}</span>
+        </div>
+      ))}
+
+      {/* Actions */}
+      <div style={{ marginTop: "20px", display: "flex", flexDirection: "column", gap: "8px" }}>
+        <button
+          disabled={saving}
+          onClick={save}
+          style={{ ...S.btn("primary"), width: "100%", padding: "10px", opacity: saving ? 0.6 : 1 }}>
+          {saving ? "Saving..." : "Save Changes"}
+        </button>
+        <button onClick={() => onDelete(server.id)} style={{ ...S.btn("danger"), width: "100%", padding: "10px" }}>
+          Delete Server
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function DaminiHost() {
   const [user, setUser] = useState(null);
@@ -560,13 +653,23 @@ export default function DaminiHost() {
           <div style={{ flex: 1, overflowY: "auto" }}>
             {/* Upload button */}
             <div style={{ padding: "14px 14px 0" }}>
-              <input ref={fileInputRef} type="file" accept=".zip" style={{ display: "none" }} onChange={handleFileSelect} />
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploading}
-                style={{ ...S.btn("primary"), width: "100%", padding: "12px", fontSize: "13px", opacity: uploading ? 0.6 : 1, display: "flex", alignItems: "center", justifyContent: "center", gap: "8px" }}>
+              <label style={{
+                display: "flex", alignItems: "center", justifyContent: "center", gap: "8px",
+                width: "100%", padding: "12px", borderRadius: "4px", fontSize: "13px",
+                fontWeight: "600", letterSpacing: "0.5px", cursor: uploading ? "not-allowed" : "pointer",
+                background: uploading ? "#006644" : "#00ff88", color: "#000",
+                opacity: uploading ? 0.6 : 1, userSelect: "none",
+                WebkitTapHighlightColor: "transparent",
+              }}>
+                <input
+                  type="file"
+                  accept=".zip,application/zip"
+                  style={{ display: "none" }}
+                  disabled={uploading}
+                  onChange={handleFileSelect}
+                />
                 {uploading ? "⟳ Uploading..." : "⬆ Upload .zip"}
-              </button>
+              </label>
               <div style={{ fontSize: "11px", color: "#3a3a3a", textAlign: "center", marginTop: "5px" }}>Tap to select from your device</div>
             </div>
 
@@ -722,23 +825,13 @@ export default function DaminiHost() {
 
         {/* ── Settings ── */}
         {tab === "settings" && (
-          <div style={{ flex: 1, overflowY: "auto", padding: "14px" }}>
-            {[
-              ["Name", activeServer.name],
-              ["Server ID", activeServer.id],
-              ["Start Command", activeServer.startCmd || "node index.js"],
-              ["Node Version", activeServer.nodeVersion || "20.x"],
-              ["Status", activeServer.status],
-            ].map(([k, v]) => (
-              <div key={k} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "11px 0", borderBottom: "1px solid #141414", gap: "12px" }}>
-                <span style={{ color: "#555", fontSize: "12px", flexShrink: 0 }}>{k}</span>
-                <span style={{ color: "#ccc", fontSize: "12px", textAlign: "right", wordBreak: "break-all" }}>{v}</span>
-              </div>
-            ))}
-            <div style={{ marginTop: "20px" }}>
-              <button onClick={() => deleteServer(activeServer.id)} style={{ ...S.btn("danger"), width: "100%", padding: "10px" }}>Delete Server</button>
-            </div>
-          </div>
+          <SettingsTab server={activeServer} onDelete={deleteServer} onSave={async (updates) => {
+            try {
+              await serversApi.update(activeServer.id, updates);
+              setServers(prev => prev.map(s => s.id === activeServer.id ? { ...s, ...updates } : s));
+              toast("✓ Saved");
+            } catch (e) { toast("Error: " + e.message); }
+          }} S={S} isMobile={isMobile} />
         )}
       </div>
     );
