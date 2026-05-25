@@ -11,19 +11,16 @@ const router = express.Router();
 
 // ─── Paths ────────────────────────────────────────────────────────────────────
 const SERVERS_DIR = path.join(__dirname, "../../data/servers");
+const UPLOADS_TMP = path.join(__dirname, "../../data/uploads_tmp");
 if (!fs.existsSync(SERVERS_DIR)) fs.mkdirSync(SERVERS_DIR, { recursive: true });
+if (!fs.existsSync(UPLOADS_TMP)) fs.mkdirSync(UPLOADS_TMP, { recursive: true });
 
-// ─── Multer (zip uploads, 100 MB max) ────────────────────────────────────────
+// ─── Multer ───────────────────────────────────────────────────────────────────
+// NO fileFilter — mobile browsers send .zip as application/octet-stream
+// which breaks mime-based filters. We validate by extension inside the route.
 const upload = multer({
-  dest: path.join(__dirname, "../../data/uploads_tmp"),
-  limits: { fileSize: 100 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype === "application/zip" || file.originalname.endsWith(".zip")) {
-      cb(null, true);
-    } else {
-      cb(new Error("Only .zip files are allowed"));
-    }
-  },
+  dest: UPLOADS_TMP,
+  limits: { fileSize: 200 * 1024 * 1024 },
 });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -35,25 +32,26 @@ function serverDir(serverId) {
   return path.join(SERVERS_DIR, serverId);
 }
 
-function dirFiles(dir, subpath = "") {
+function dirFiles(dir, subpath) {
   const target = subpath ? path.join(dir, subpath) : dir;
   if (!fs.existsSync(target)) return [];
   return fs.readdirSync(target).map((name) => {
     const full = path.join(target, name);
     const stat = fs.statSync(full);
-    return { name, isDir: stat.isDirectory(), size: stat.size, path: subpath ? `${subpath}/${name}` : name };
+    return {
+      name,
+      isDir: stat.isDirectory(),
+      size: stat.size,
+      path: subpath ? `${subpath}/${name}` : name,
+    };
   });
 }
 
-// After extraction, if the zip had a single root folder, move its contents up
-// e.g. mybot-main/index.js → index.js
 function flattenSingleRootFolder(dir) {
   const entries = fs.readdirSync(dir);
   if (entries.length !== 1) return;
   const only = path.join(dir, entries[0]);
   if (!fs.statSync(only).isDirectory()) return;
-
-  // Move everything from the nested folder up
   const inner = fs.readdirSync(only);
   for (const item of inner) {
     fs.renameSync(path.join(only, item), path.join(dir, item));
@@ -98,7 +96,6 @@ router.post("/", (req, res) => {
 router.get("/:id", (req, res) => {
   const server = ownedBy(req.params.id, req.user.id);
   if (!server) return res.status(404).json({ error: "Server not found" });
-
   res.json({
     ...server,
     status: pm.getStatus(server.id),
@@ -187,29 +184,42 @@ router.get("/:id/logs", (req, res) => {
   req.on("close", () => { clearInterval(hb); pm.removeSSEClient(server.id, res); });
 });
 
-// ─── POST /api/servers/:id/upload — save zip into server folder as-is ─────────
-router.post("/:id/upload", upload.single("file"), async (req, res) => {
+// ─── POST /api/servers/:id/upload ────────────────────────────────────────────
+// Saves the file as-is into the server folder. No auto-extraction.
+// Uses copyFile+unlink instead of rename to handle cross-device moves on Render.
+router.post("/:id/upload", upload.single("file"), (req, res) => {
   const server = ownedBy(req.params.id, req.user.id);
   if (!server) return res.status(404).json({ error: "Server not found" });
-  if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+  console.log("[upload] req.file =", req.file);
+
+  if (!req.file) {
+    return res.status(400).json({ error: "No file received. Make sure you are sending a .zip file in the 'file' field." });
+  }
 
   const dir = serverDir(server.id);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
+  // Use original filename, fallback to upload.zip
+  const destName = (req.file.originalname || "upload.zip").replace(/[^a-zA-Z0-9._-]/g, "_");
+  const destPath = path.join(dir, destName);
+
   try {
-    const destName = req.file.originalname || "upload.zip";
-    const destPath = path.join(dir, destName);
-    fs.renameSync(req.file.path, destPath);
+    // copyFile + unlink handles cross-device (tmp → data) on Render
+    fs.copyFileSync(req.file.path, destPath);
+    fs.unlinkSync(req.file.path);
 
     const files = dirFiles(dir);
+    console.log("[upload] saved to", destPath, "| files now:", files.map(f => f.name));
     res.json({ ok: true, files });
   } catch (err) {
+    console.error("[upload] error:", err);
     try { fs.unlinkSync(req.file.path); } catch (_) {}
     res.status(500).json({ error: "Upload failed: " + err.message });
   }
 });
 
-// ─── POST /api/servers/:id/extract — extract a zip already in the folder ──────
+// ─── POST /api/servers/:id/extract ───────────────────────────────────────────
 router.post("/:id/extract", async (req, res) => {
   const server = ownedBy(req.params.id, req.user.id);
   if (!server) return res.status(404).json({ error: "Server not found" });
@@ -239,16 +249,14 @@ router.get("/:id/files", (req, res) => {
   if (!server) return res.status(404).json({ error: "Server not found" });
 
   const subpath = req.query.path || "";
-  // Security: prevent path traversal
-  const resolved = path.resolve(serverDir(server.id), subpath);
-  if (!resolved.startsWith(serverDir(server.id))) {
-    return res.status(400).json({ error: "Invalid path" });
-  }
+  const base = serverDir(server.id);
+  const resolved = path.resolve(base, subpath);
+  if (!resolved.startsWith(base)) return res.status(400).json({ error: "Invalid path" });
 
-  res.json({ files: dirFiles(serverDir(server.id), subpath), currentPath: subpath });
+  res.json({ files: dirFiles(base, subpath || undefined), currentPath: subpath });
 });
 
-// ─── DELETE /api/servers/:id/files — delete by path in body ──────────────────
+// ─── DELETE /api/servers/:id/files ───────────────────────────────────────────
 router.delete("/:id/files", (req, res) => {
   const server = ownedBy(req.params.id, req.user.id);
   if (!server) return res.status(404).json({ error: "Server not found" });
@@ -256,40 +264,35 @@ router.delete("/:id/files", (req, res) => {
   const filePath = req.body.path || req.query.path;
   if (!filePath) return res.status(400).json({ error: "path is required" });
 
-  const resolved = path.resolve(serverDir(server.id), filePath);
-  if (!resolved.startsWith(serverDir(server.id))) {
-    return res.status(400).json({ error: "Invalid path" });
-  }
-
+  const base = serverDir(server.id);
+  const resolved = path.resolve(base, filePath);
+  if (!resolved.startsWith(base)) return res.status(400).json({ error: "Invalid path" });
   if (!fs.existsSync(resolved)) return res.status(404).json({ error: "File not found" });
 
   fs.rmSync(resolved, { recursive: true, force: true });
   res.json({ ok: true });
 });
 
-// ─── POST /api/servers/:id/files/move — move file up a level ─────────────────
+// ─── POST /api/servers/:id/files/move ────────────────────────────────────────
 router.post("/:id/files/move", (req, res) => {
   const server = ownedBy(req.params.id, req.user.id);
   if (!server) return res.status(404).json({ error: "Server not found" });
 
-  const { from, to } = req.body; // both relative to server dir
+  const { from, to } = req.body;
   if (!from || !to) return res.status(400).json({ error: "from and to are required" });
 
   const base = serverDir(server.id);
   const src = path.resolve(base, from);
   const dest = path.resolve(base, to);
 
-  if (!src.startsWith(base) || !dest.startsWith(base)) {
-    return res.status(400).json({ error: "Invalid path" });
-  }
-
+  if (!src.startsWith(base) || !dest.startsWith(base)) return res.status(400).json({ error: "Invalid path" });
   if (!fs.existsSync(src)) return res.status(404).json({ error: "Source not found" });
 
   fs.renameSync(src, dest);
   res.json({ ok: true, files: dirFiles(base) });
 });
 
-// ─── POST /api/servers/:id/startup — save startup file ───────────────────────
+// ─── POST /api/servers/:id/startup ───────────────────────────────────────────
 router.post("/:id/startup", (req, res) => {
   const server = ownedBy(req.params.id, req.user.id);
   if (!server) return res.status(404).json({ error: "Server not found" });
@@ -297,27 +300,21 @@ router.post("/:id/startup", (req, res) => {
   const { content, filename = "index.js" } = req.body;
   if (content === undefined) return res.status(400).json({ error: "content is required" });
 
-  // Security: filename must be safe
   const safe = path.basename(filename);
-  const filePath = path.join(serverDir(server.id), safe);
-
-  fs.writeFileSync(filePath, content, "utf8");
+  fs.writeFileSync(path.join(serverDir(server.id), safe), content, "utf8");
   res.json({ ok: true, filename: safe });
 });
 
-// ─── GET /api/servers/:id/startup — read a file ──────────────────────────────
+// ─── GET /api/servers/:id/startup ────────────────────────────────────────────
 router.get("/:id/startup", (req, res) => {
   const server = ownedBy(req.params.id, req.user.id);
   if (!server) return res.status(404).json({ error: "Server not found" });
 
-  const filename = req.query.file || "index.js";
-  const safe = path.basename(filename);
+  const safe = path.basename(req.query.file || "index.js");
   const filePath = path.join(serverDir(server.id), safe);
 
   if (!fs.existsSync(filePath)) return res.json({ content: "", filename: safe });
-
-  const content = fs.readFileSync(filePath, "utf8");
-  res.json({ content, filename: safe });
+  res.json({ content: fs.readFileSync(filePath, "utf8"), filename: safe });
 });
 
 module.exports = router;

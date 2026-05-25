@@ -421,18 +421,19 @@ export default function DaminiHost() {
   const handleFileSelect = async (e) => {
     const file = e.target.files?.[0];
     if (!file || !activeId) return;
-    if (!file.name.endsWith(".zip")) { toast("Only .zip files allowed"); return; }
     setUploading(true);
     toast("Uploading...");
     try {
       const res = await serversApi.upload(activeId, file);
-      // res.files comes directly from the backend after extraction
       setFiles(res.files || []);
       setCurrentPath("");
       setTab("files");
-      toast(`✓ Uploaded & extracted ${res.files?.length || 0} items`);
-    } catch (e) {
-      toast("Upload failed: " + e.message);
+      await loadFiles(activeId, "");
+      toast(`✓ Uploaded — ${res.files?.length || 0} file(s) in folder`);
+    } catch (err) {
+      toast("Upload failed: " + err.message);
+      await loadFiles(activeId, "");
+      setTab("files");
     } finally {
       setUploading(false);
       e.target.value = "";
