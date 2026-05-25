@@ -472,6 +472,24 @@ export default function DaminiHost() {
     } catch (e) { toast("Error: " + e.message); }
   };
 
+  // ── Extract zip ───────────────────────────────────────────────────────────────
+  const handleExtract = async (filename) => {
+    toast("Extracting...");
+    try {
+      const BASE = import.meta.env.VITE_API_URL || "";
+      const res = await fetch(`${BASE}/api/servers/${activeId}/extract`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${authApi.token()}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ filename }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Extraction failed");
+      setFiles(data.files || []);
+      setCurrentPath("");
+      toast("✓ Extracted successfully");
+    } catch (e) { toast("Error: " + e.message); }
+  };
+
   // ── Save startup file ─────────────────────────────────────────────────────────
   const saveStartup = async () => {
     if (!activeId) return;
@@ -706,11 +724,11 @@ export default function DaminiHost() {
                 </div>
               )}
               {files.map((f, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "9px 12px", borderRadius: "4px", marginBottom: "4px", background: "#0f0f0f", border: "1px solid #1a1a1a" }}>
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "9px 12px", borderRadius: "4px", marginBottom: "4px", background: "#0f0f0f", border: `1px solid ${f.name.endsWith(".zip") ? "#7c6aff44" : "#1a1a1a"}` }}>
                   <span
-                    style={{ color: f.isDir ? "#7c6aff" : "#00ff88", fontSize: "14px", cursor: f.isDir ? "pointer" : "default" }}
+                    style={{ color: f.isDir ? "#7c6aff" : f.name.endsWith(".zip") ? "#ffcc44" : "#00ff88", fontSize: "14px", cursor: f.isDir ? "pointer" : "default" }}
                     onClick={() => f.isDir && loadFiles(activeId, f.path || f.name)}>
-                    {f.isDir ? "📁" : "📄"}
+                    {f.isDir ? "📁" : f.name.endsWith(".zip") ? "🗜" : "📄"}
                   </span>
                   <span
                     style={{ flex: 1, fontSize: "12px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: f.isDir ? "pointer" : "default", color: f.isDir ? "#aaa" : "#ccc" }}
@@ -720,11 +738,18 @@ export default function DaminiHost() {
                   <span style={{ color: "#333", fontSize: "11px", flexShrink: 0 }}>
                     {f.isDir ? "dir" : `${Math.round((f.size || 0) / 1024) || "<1"}KB`}
                   </span>
-                  {/* Move up button — useful when files are nested in a subfolder */}
+                  {/* Extract button for zip files */}
+                  {f.name.endsWith(".zip") && (
+                    <button
+                      onClick={() => handleExtract(f.name)}
+                      style={{ ...S.btn("primary"), padding: "2px 8px", fontSize: "11px", flexShrink: 0 }}>
+                      ⬇ Extract
+                    </button>
+                  )}
+                  {/* Move up button — for files inside a subfolder */}
                   {currentPath && !f.isDir && (
                     <button
                       onClick={() => handleMoveUp(f.path || `${currentPath}/${f.name}`)}
-                      title="Move to root"
                       style={{ ...S.btn(), padding: "2px 6px", fontSize: "10px", flexShrink: 0 }}>
                       ↑ root
                     </button>
